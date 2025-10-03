@@ -32,6 +32,9 @@ const defaultCenter = {
   lng: -99.1332,
 }
 
+// Define libraries outside of the component to prevent re-creation on re-renders
+const libraries: ("drawing" | "geometry")[] = ["drawing", "geometry"];
+
 interface DeliveryZoneMapProps {
   apiKey: string
   zones: MappedDeliveryZone[]
@@ -53,7 +56,7 @@ export function DeliveryZoneMap({
 }: DeliveryZoneMapProps) {
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: apiKey,
-    libraries: ["drawing", "geometry"],
+    libraries, // Use the constant here
   })
 
   const mapRef = useRef<google.maps.Map | null>(null)

@@ -22,30 +22,30 @@ export interface PushNotificationConfig {
 }
 
 /**
- * Envía una notificación push a un usuario específico
+ * Envía una notificación push a un usuario específico.
+ * Esta función está preparada para integrarse con un servicio real.
  */
 export async function sendPushNotification(userId: number, config: PushNotificationConfig): Promise<boolean> {
+  console.log(`Attempting to send push notification to user ${userId}:`, config.title)
+
+  // En un entorno de producción, aquí se integraría con un servicio como:
+  // - Firebase Cloud Messaging (FCM)
+  // - OneSignal
+  // - Pusher Beams
+  // Esta es la ubicación para añadir la lógica de envío real.
+  
+  // Por ahora, como no hay un servicio real configurado, la función
+  // registrará el intento y devolverá `true` para no interrumpir el flujo.
+  // Esto asume que el sistema externo (que no tenemos) funcionaría.
   try {
-    console.log(` Sending push notification to user ${userId}:`, config.title)
+    // const response = await fetch('https://api.fcm.googleapis.com/...', { ... });
+    // if (!response.ok) throw new Error('FCM request failed');
+    
+    console.log(`Push notification for user ${userId} would be sent here if a service was configured.`)
+    return true; // Asumimos éxito para el flujo de desarrollo
 
-    // En producción, aquí se integraría con un servicio como:
-    // - Firebase Cloud Messaging (FCM)
-    // - OneSignal
-    // - Pusher Beams
-    // - Web Push API
-
-    // Por ahora, simulamos el envío
-    const mockSuccess = Math.random() > 0.1 // 90% success rate
-
-    if (mockSuccess) {
-      console.log(` Push notification sent successfully to user ${userId}`)
-      return true
-    } else {
-      console.warn(` Failed to send push notification to user ${userId}`)
-      return false
-    }
   } catch (error) {
-    console.error(" Error sending push notification:", error)
+    console.error(`Error sending push notification to user ${userId}:`, error)
     return false
   }
 }
@@ -60,8 +60,10 @@ export async function sendBulkPushNotifications(
   let success = 0
   let failed = 0
 
-  for (const userId of userIds) {
-    const result = await sendPushNotification(userId, config)
+  const notifications = userIds.map(userId => sendPushNotification(userId, config));
+  const results = await Promise.all(notifications);
+
+  for (const result of results) {
     if (result) {
       success++
     } else {
@@ -69,6 +71,7 @@ export async function sendBulkPushNotifications(
     }
   }
 
+  console.log(`Bulk push notification results: ${success} succeeded, ${failed} failed.`);
   return { success, failed }
 }
 

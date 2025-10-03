@@ -1,54 +1,65 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { MapPin, Navigation, Clock } from "lucide-react"
-import { useDriverTracking } from "@/lib/hooks/use-driver-tracking"
+import { useEffect, useState, useMemo } from "react";
+import { GoogleMap, useJsApiLoader, Marker, DirectionsRenderer } from "@react-google-maps/api";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { MapPin, Navigation, Clock } from "lucide-react";
+import { useDriverTracking } from "@/lib/hooks/use-driver-tracking";
 
 interface LiveTrackingMapProps {
-  orderId: number
-  storeLocation: { lat: number; lng: number }
-  deliveryLocation: { lat: number; lng: number }
+  orderId: number;
+  storeLocation: { lat: number; lng: number };
+  deliveryLocation: { lat: number; lng: number };
+  googleMapsApiKey: string;
 }
 
-export function LiveTrackingMap({ orderId, storeLocation, deliveryLocation }: LiveTrackingMapProps) {
-  const { driverLocation, isConnected } = useDriverTracking(orderId)
-  const [route, setRoute] = useState<any>(null)
-  const [estimatedArrival, setEstimatedArrival] = useState<string>("")
+const containerStyle = {
+  width: "100%",
+  height: "100%",
+};
+
+// Define libraries outside of the component to prevent re-creation
+const libraries: ("places" | "drawing" | "geometry")[] = ["places"];
+
+export function LiveTrackingMap({ orderId, storeLocation, deliveryLocation, googleMapsApiKey }: LiveTrackingMapProps) {
+  const { isLoaded } = useJsApiLoader({
+    googleMapsApiKey: googleMapsApiKey,
+    libraries,
+  });
+
+  const { driverLocation, isConnected } = useDriverTracking(orderId);
+  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
+  const [estimatedArrival, setEstimatedArrival] = useState<string>("");
+
+  const center = useMemo(() => driverLocation || storeLocation, [driverLocation, storeLocation]);
 
   useEffect(() => {
-    // Calcular ruta cuando hay ubicación del repartidor
-    if (driverLocation) {
-      fetchRoute()
+    if (isLoaded && driverLocation) {
+      const directionsService = new google.maps.DirectionsService();
+      directionsService.route(
+        {
+          origin: new google.maps.LatLng(driverLocation.lat, driverLocation.lng),
+          destination: new google.maps.LatLng(deliveryLocation.lat, deliveryLocation.lng),
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK && result) {
+            setDirections(result);
+            const leg = result.routes[0].legs[0];
+            if (leg.duration) {
+              const arrivalTime = new Date(Date.now() + leg.duration.value * 1000);
+              setEstimatedArrival(arrivalTime.toLocaleTimeString());
+            }
+          } else {
+            console.error(`error fetching directions ${result}`);
+          }
+        }
+      );
     }
-  }, [driverLocation])
+  }, [isLoaded, driverLocation, deliveryLocation]);
 
-  const fetchRoute = async () => {
-    if (!driverLocation) return
-
-    try {
-      const response = await fetch("/api/google-maps/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          origin: { lat: driverLocation.lat, lng: driverLocation.lng },
-          destination: deliveryLocation,
-        }),
-      })
-
-      const data = await response.json()
-      if (data.route) {
-        setRoute(data.route)
-
-        // Calcular tiempo estimado de llegada
-        const arrivalTime = new Date(Date.now() + data.route.duration.value * 1000)
-        setEstimatedArrival(arrivalTime.toLocaleTimeString())
-      }
-    } catch (error) {
-      console.error(" Error fetching route:", error)
-    }
-  }
+  if (!isLoaded) return <div>Loading Map...</div>;
 
   return (
     <Card>
@@ -62,60 +73,35 @@ export function LiveTrackingMap({ orderId, storeLocation, deliveryLocation }: Li
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Mapa - En producción usar Google Maps JavaScript API */}
         <div className="relative aspect-video overflow-hidden rounded-lg border bg-muted">
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="text-center">
-              <MapPin className="mx-auto h-12 w-12 text-muted-foreground" />
-              <p className="mt-2 text-sm text-muted-foreground">Live Map View</p>
-              <p className="text-xs text-muted-foreground">Google Maps integration ready</p>
-            </div>
-          </div>
-
-          {/* Marcadores simulados */}
-          <div className="absolute left-[20%] top-[30%]">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500">
-              <MapPin className="h-5 w-5 text-white" />
-            </div>
-            <p className="mt-1 text-xs font-medium">Store</p>
-          </div>
-
-          {driverLocation && (
-            <div className="absolute left-[50%] top-[50%]">
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-green-500">
-                <Navigation className="h-5 w-5 text-white" />
-              </div>
-              <p className="mt-1 text-xs font-medium">Driver</p>
-            </div>
-          )}
-
-          <div className="absolute right-[20%] bottom-[30%]">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-red-500">
-              <MapPin className="h-5 w-5 text-white" />
-            </div>
-            <p className="mt-1 text-xs font-medium">Delivery</p>
-          </div>
+          <GoogleMap
+            mapContainerStyle={containerStyle}
+            center={center}
+            zoom={14}
+          >
+            {storeLocation && <Marker position={storeLocation} label="Store" />}
+            {deliveryLocation && <Marker position={deliveryLocation} label="You" />}
+            {driverLocation && <Marker position={driverLocation} label="Driver" icon={{ url: "/driver-icon.svg", scaledSize: new google.maps.Size(40, 40) }} />}
+            {directions && <DirectionsRenderer directions={directions} />}
+          </GoogleMap>
         </div>
 
-        {/* Información de tracking */}
-        {route && driverLocation && (
+        {directions && (
           <div className="space-y-3">
             <div className="flex items-center justify-between rounded-lg border p-3">
               <div className="flex items-center gap-2">
                 <Navigation className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm">Distance</span>
               </div>
-              <Badge variant="secondary">{route.distance.text}</Badge>
+              <Badge variant="secondary">{directions.routes[0].legs[0].distance?.text}</Badge>
             </div>
-
             <div className="flex items-center justify-between rounded-lg border p-3">
               <div className="flex items-center gap-2">
                 <Clock className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm">Estimated Time</span>
               </div>
-              <Badge variant="secondary">{route.duration.text}</Badge>
+              <Badge variant="secondary">{directions.routes[0].legs[0].duration?.text}</Badge>
             </div>
-
             {estimatedArrival && (
               <div className="flex items-center justify-between rounded-lg border p-3">
                 <div className="flex items-center gap-2">
@@ -135,5 +121,5 @@ export function LiveTrackingMap({ orderId, storeLocation, deliveryLocation }: Li
         )}
       </CardContent>
     </Card>
-  )
+  );
 }
