@@ -1,5 +1,5 @@
-import { db, executeQuery } from "@/lib/db/connection"
-import type { ResultSetHeader, RowDataPacket } from "mysql2"
+import { db, pool, executeQuery } from "@/lib/db/connection";
+import type { ResultSetHeader, RowDataPacket } from "mysql2";
 
 // ================== ORDERS ==================
 const orderQueryFields = `
@@ -11,7 +11,7 @@ const orderQueryFields = `
   JSON_OBJECT('id', u.id, 'email', u.email, 'full_name', u.full_name, 'phone', u.phone) as customer_user,
   JSON_OBJECT('id', s.id,'name', s.name,'address', s.address,'phone', s.phone) as store,
   JSON_OBJECT('id', ca.id,'address_line1', ca.address_line1,'city', ca.city,'lat', ca.lat,'lng', ca.lng) as delivery_address
-`
+`;
 
 export async function getAllOrders(status?: string) {
   let query = `
@@ -21,17 +21,17 @@ export async function getAllOrders(status?: string) {
     JOIN users u ON c.user_id = u.id
     JOIN stores s ON o.store_id = s.id
     JOIN customer_addresses ca ON o.delivery_address_id = ca.id
-  `
-  const values: any[] = []
+  `;
+  const values: any[] = [];
 
   if (status) {
-    query += ` WHERE o.status = ?`
-    values.push(status)
+    query += ` WHERE o.status = ?`;
+    values.push(status);
   }
 
-  query += ` ORDER BY o.created_at DESC`
+  query += ` ORDER BY o.created_at DESC`;
 
-  return executeQuery(query, values)
+  return executeQuery(query, values);
 }
 
 export async function getUsersByRole(user_id?: string){
@@ -39,9 +39,11 @@ export async function getUsersByRole(user_id?: string){
     SELECT rol_id, type_user 
     FROM roles_user rs 
     WHERE rs.user_id = ? 
-    `
-const { data, error } = await executeQuery<RowDataPacket[]>(query, [user_id])
-    if (error) return { data: null, error : error }
+    `;
+    const { data, error } = await executeQuery<RowDataPacket[]>(query, [user_id]);
+    if (error) return { data: null, error : error };
+    // Assuming you want to return the data here
+    return { data, error: null };
 }
 
 
@@ -54,54 +56,54 @@ export async function getOrderById(orderId: number) {
     JOIN stores s ON o.store_id = s.id
     JOIN customer_addresses ca ON o.delivery_address_id = ca.id
     WHERE o.id = ?
-  `
-  const { data, error } = await executeQuery<RowDataPacket[]>(query, [orderId])
-  if (error) return { data, error }
+  `;
+  const { data, error } = await executeQuery<RowDataPacket[]>(query, [orderId]);
+  if (error) return { data, error };
 
-  const order = data?.[0]
-    ? {
-        ...data[0],
-        customer_user: JSON.parse(data[0].customer_user),
-        store: JSON.parse(data[0].store),
-        delivery_address: JSON.parse(data[0].delivery_address),
-      }
-    : null
-
-  return { data: order, error: null }
+  if (data && data.length > 0) {
+    const orderData = data[0] as any;
+    const order = {
+        ...orderData,
+        customer_user: JSON.parse(orderData.customer_user || '{}'),
+        store: JSON.parse(orderData.store || '{}'),
+        delivery_address: JSON.parse(orderData.delivery_address || '{}'),
+      };
+    return { data: order, error: null };
+  }
+  
+  return { data: null, error: null };
 }
 
 export async function createOrder(orderData: any) {
-  const connection = await db.getConnection()
+  const connection = await pool.getConnection();
   try {
-    await connection.beginTransaction()
+    await connection.beginTransaction();
 
-    // 1. Verificar que todos los productos existen y pertenecen a la tienda correcta
-    const productIds = orderData.items.map((item: any) => item.productId)
+    const productIds = orderData.items.map((item: any) => item.productId);
     const [existingProducts] = await connection.execute<RowDataPacket[]>(
       `SELECT id, price FROM products WHERE id IN (${productIds.map(() => '?').join(',')}) AND store_id = ?`,
       [...productIds, orderData.storeId]
-    )
+    );
 
     if (existingProducts.length !== productIds.length) {
-      throw new Error('Algunos productos no existen o no pertenecen a la tienda seleccionada.')
+      throw new Error('Algunos productos no existen o no pertenecen a la tienda seleccionada.');
     }
 
-    // 2. Calcular el monto total del pedido
-    let totalAmount = 0
-    const productPriceMap = new Map(existingProducts.map(p => [p.id, p.price]))
+    let totalAmount = 0;
+    const productPriceMap = new Map(existingProducts.map((p: any) => [p.id, p.price]));
 
     for (const item of orderData.items) {
-      const price = productPriceMap.get(item.productId)
+      const price = productPriceMap.get(item.productId);
       if (price) {
-        totalAmount += parseFloat(price) * item.quantity
+        totalAmount += parseFloat(price) * item.quantity;
       }
     }
 
-    const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`
+    const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
     const orderQuery = `
       INSERT INTO orders (order_number, customer_id, store_id, delivery_address_id, status, subtotal, delivery_fee, tax, total, payment_method, special_instructions)
       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
-    `
+    `;
     const [orderResult] = await connection.execute<ResultSetHeader>(orderQuery, [
       orderNumber,
       orderData.customerId,
@@ -113,65 +115,66 @@ export async function createOrder(orderData: any) {
       (totalAmount + (orderData.delivery_fee || 0) + (orderData.tax || 0)).toFixed(2),
       orderData.paymentMethod,
       orderData.notes || null,
-    ])
+    ]);
 
-    const orderId = orderResult.insertId
+    const orderId = orderResult.insertId;
 
     const itemsQuery = `
       INSERT INTO order_items (order_id, product_id, quantity, unit_price, subtotal)
       VALUES ?
-    `
+    `;
     const itemsValues = orderData.items.map((item: any) => [
       orderId,
       item.productId,
       item.quantity,
       productPriceMap.get(item.productId),
-      (parseFloat(productPriceMap.get(item.productId)) * item.quantity).toFixed(2),
-    ])
-    await connection.query(itemsQuery, [itemsValues])
+      (parseFloat(productPriceMap.get(item.productId) || '0') * item.quantity).toFixed(2),
+    ]);
+    await connection.query(itemsQuery, [itemsValues]);
 
     const trackingQuery = `
       INSERT INTO order_tracking (order_id, status, notes)
       VALUES (?, 'pending', 'Pedido creado')
-    `
-    await connection.execute(trackingQuery, [orderId])
+    `;
+    await connection.execute(trackingQuery, [orderId]);
 
-    await connection.commit()
-    return getOrderById(orderId)
+    await connection.commit();
+    return getOrderById(orderId);
   } catch (error) {
-    await connection.rollback()
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    return { data: null, error: `Transaction failed: ${errorMessage}` }
+    await connection.rollback();
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return { data: null, error: `Transaction failed: ${errorMessage}` };
   } finally {
-    connection.release()
+    connection.release();
   }
 }
 
 export async function updateOrderStatus(orderId: number, status: string, notes?: string) {
-  const connection = await db.getConnection()
-  try {
-    await connection.beginTransaction()
-
-    await connection.execute("UPDATE orders SET status = ?, updated_at = NOW() WHERE id = ?", [status, orderId])
-    await connection.execute("INSERT INTO order_tracking (order_id, status, notes) VALUES (?, ?, ?)", [
-      orderId,
-      status,
-      notes || null,
-    ])
-
-    await connection.commit()
-    return getOrderById(orderId)
-  } catch (error) {
-    await connection.rollback()
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    return { data: null, error: `Transaction failed: ${errorMessage}` }
-  } finally {
-    connection.release()
-  }
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+  
+      await connection.execute("UPDATE orders SET status = ?, updated_at = NOW() WHERE id = ?", [status, orderId]);
+      await connection.execute("INSERT INTO order_tracking (order_id, status, notes) VALUES (?, ?, ?)", [
+        orderId,
+        status,
+        notes || null,
+      ]);
+  
+      await connection.commit();
+      return getOrderById(orderId);
+    } catch (error) {
+      await connection.rollback();
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return { data: null, error: `Transaction failed: ${errorMessage}` };
+    } finally {
+      connection.release();
+    }
 }
+  
 
 export async function assignOrderToDriver(orderId: number, driverId: number) {
-  return updateOrderStatus(orderId, "assigned", `Pedido asignado al repartidor #${driverId}`)
+  return updateOrderStatus(orderId, "assigned", `Pedido asignado al repartidor #${driverId}`);
 }
 
 // ================== CUSTOMERS ==================
@@ -181,8 +184,8 @@ export async function getAllCustomers() {
     FROM customers c
     JOIN users u ON c.user_id = u.id
     ORDER BY u.full_name ASC
-  `
-  return executeQuery(query)
+  `;
+  return executeQuery(query);
 }
 
 export async function getCustomerById(id: number) {
@@ -191,115 +194,112 @@ export async function getCustomerById(id: number) {
     FROM customers c
     JOIN users u ON c.user_id = u.id
     WHERE c.id = ?
-  `
-  const { data, error } = await executeQuery<RowDataPacket[]>(query, [id])
-  return { data: data?.[0] || null, error }
+  `;
+  const { data, error } = await executeQuery<RowDataPacket[]>(query, [id]);
+  return { data: data?.[0] || null, error };
 }
 
 export async function createCustomer(customerData: any) {
-  const connection = await db.getConnection()
+  const connection = await pool.getConnection();
   try {
-    await connection.beginTransaction()
+    await connection.beginTransaction();
 
     const [userResult] = await connection.execute<ResultSetHeader>(
       "INSERT INTO users (full_name, email, phone, role_id, password_hash) VALUES (?, ?, ?, 'customer', 'password_placeholder')",
       [customerData.full_name, customerData.email, customerData.phone]
-    )
-    const userId = userResult.insertId
+    );
+    const userId = userResult.insertId;
 
     const [customerResult] = await connection.execute<ResultSetHeader>(
       "INSERT INTO customers (user_id, notes) VALUES (?, ?)",
       [userId, customerData.notes || null]
-    )
+    );
 
-    await connection.commit()
-    return getCustomerById(customerResult.insertId)
+    await connection.commit();
+    return getCustomerById(customerResult.insertId);
   } catch (error) {
-    await connection.rollback()
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    return { data: null, error: `Transaction failed: ${errorMessage}` }
+    await connection.rollback();
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return { data: null, error: `Transaction failed: ${errorMessage}` };
   } finally {
-    connection.release()
+    connection.release();
   }
 }
 
 export async function updateCustomer(id: number, customerData: any) {
-  const connection = await db.getConnection()
-  try {
-    await connection.beginTransaction()
-
-    const [rows] = await connection.execute<RowDataPacket[]>("SELECT user_id FROM customers WHERE id = ?", [id])
-    if (rows.length === 0) throw new Error("Customer not found")
-    const userId = rows[0].user_id
-
-    // Update users table
-    const userFields: string[] = []
-    const userValues: any[] = []
-    if (customerData.full_name) {
-      userFields.push("full_name = ?")
-      userValues.push(customerData.full_name)
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+  
+      const [rows] = await connection.execute<RowDataPacket[]>("SELECT user_id FROM customers WHERE id = ?", [id]);
+      if (rows.length === 0) throw new Error("Customer not found");
+      const userId = rows[0].user_id;
+  
+      const userFields: string[] = [];
+      const userValues: any[] = [];
+      if (customerData.full_name) {
+        userFields.push("full_name = ?");
+        userValues.push(customerData.full_name);
+      }
+      if (customerData.email) {
+        userFields.push("email = ?");
+        userValues.push(customerData.email);
+      }
+      if (customerData.phone) {
+        userFields.push("phone = ?");
+        userValues.push(customerData.phone);
+      }
+      if (userFields.length > 0) {
+        await connection.execute(`UPDATE users SET ${userFields.join(", ")}, updated_at = NOW() WHERE id = ?`, [
+          ...userValues,
+          userId,
+        ]);
+      }
+  
+      if (customerData.notes) {
+        await connection.execute("UPDATE customers SET notes = ? WHERE id = ?", [customerData.notes, id]);
+      }
+  
+      await connection.commit();
+      return getCustomerById(id);
+    } catch (error) {
+      await connection.rollback();
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return { data: null, error: `Transaction failed: ${errorMessage}` };
+    } finally {
+      connection.release();
     }
-    if (customerData.email) {
-      userFields.push("email = ?")
-      userValues.push(customerData.email)
-    }
-    if (customerData.phone) {
-      userFields.push("phone = ?")
-      userValues.push(customerData.phone)
-    }
-    if (userFields.length > 0) {
-      await connection.execute(`UPDATE users SET ${userFields.join(", ")}, updated_at = NOW() WHERE id = ?`, [
-        ...userValues,
-        userId,
-      ])
-    }
-
-    // Update customers table
-    if (customerData.notes) {
-      await connection.execute("UPDATE customers SET notes = ? WHERE id = ?", [customerData.notes, id])
-    }
-
-    await connection.commit()
-    return getCustomerById(id)
-  } catch (error) {
-    await connection.rollback()
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    return { data: null, error: `Transaction failed: ${errorMessage}` }
-  } finally {
-    connection.release()
   }
-}
 
 export async function deleteCustomer(id: number) {
-  const connection = await db.getConnection()
-  try {
-    await connection.beginTransaction()
-
-    const [rows] = await connection.execute<RowDataPacket[]>("SELECT user_id FROM customers WHERE id = ?", [id])
-    if (rows.length === 0) {
-      throw new Error("Customer not found")
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+  
+      const [rows] = await connection.execute<RowDataPacket[]>("SELECT user_id FROM customers WHERE id = ?", [id]);
+      if (rows.length === 0) {
+        throw new Error("Customer not found");
+      }
+      const userId = rows[0].user_id;
+  
+      await connection.execute("DELETE FROM users WHERE id = ?", [userId]);
+  
+      await connection.commit();
+      return { data: { success: true }, error: null };
+    } catch (error) {
+      await connection.rollback();
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return { data: null, error: `Transaction failed: ${errorMessage}` };
+    } finally {
+      connection.release();
     }
-    const userId = rows[0].user_id
-
-    // Deleting the user will cascade and delete the customer due to the foreign key constraint
-    await connection.execute("DELETE FROM users WHERE id = ?", [userId])
-
-    await connection.commit()
-    return { data: { success: true }, error: null }
-  } catch (error) {
-    await connection.rollback()
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    return { data: null, error: `Transaction failed: ${errorMessage}` }
-  } finally {
-    connection.release()
-  }
 }
 
 
 // ================== ADDRESSES ==================
 export async function getAddressesByUserId(userId: number) {
-  const query = "SELECT * FROM customer_addresses WHERE user_id = ? ORDER BY is_default DESC, created_at DESC"
-  return executeQuery(query, [userId])
+  const query = "SELECT * FROM customer_addresses WHERE user_id = ? ORDER BY is_default DESC, created_at DESC";
+  return executeQuery(query, [userId]);
 }
 
 // ================== DRIVERS ==================
@@ -309,8 +309,8 @@ export async function getAllDrivers() {
     FROM drivers d
     JOIN users u ON d.user_id = u.id
     ORDER BY u.full_name ASC
-  `
-  return executeQuery(query)
+  `;
+  return executeQuery(query);
 }
 
 export async function getDriverById(driverId: number) {
@@ -319,117 +319,118 @@ export async function getDriverById(driverId: number) {
     FROM drivers d
     JOIN users u ON d.user_id = u.id
     WHERE d.id = ?
-  `
-  const { data, error } = await executeQuery<RowDataPacket[]>(query, [driverId])
-  return { data: data?.[0] || null, error }
+  `;
+  const { data, error } = await executeQuery<RowDataPacket[]>(query, [driverId]);
+  return { data: data?.[0] || null, error };
 }
 
 export async function createDriver(driverData: any) {
-  const connection = await db.getConnection()
-  try {
-    await connection.beginTransaction()
-
-    const [userResult] = await connection.execute<ResultSetHeader>(
-      "INSERT INTO users (full_name, email, phone, role_id, password_hash) VALUES (?, ?, ?, 'driver', 'password_placeholder')",
-      [driverData.full_name, driverData.email, driverData.phone]
-    )
-    const userId = userResult.insertId
-
-    const [driverResult] = await connection.execute<ResultSetHeader>(
-      "INSERT INTO drivers (user_id, vehicle_type, license_plate) VALUES (?, ?, ?)",
-      [userId, driverData.vehicle_type, driverData.license_plate]
-    )
-
-    await connection.commit()
-    return getDriverById(driverResult.insertId)
-  } catch (error) {
-    await connection.rollback()
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    return { data: null, error: `Transaction failed: ${errorMessage}` }
-  } finally {
-    connection.release()
-  }
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+  
+      const [userResult] = await connection.execute<ResultSetHeader>(
+        "INSERT INTO users (full_name, email, phone, role_id, password_hash) VALUES (?, ?, ?, 'driver', 'password_placeholder')",
+        [driverData.full_name, driverData.email, driverData.phone]
+      );
+      const userId = userResult.insertId;
+  
+      const [driverResult] = await connection.execute<ResultSetHeader>(
+        "INSERT INTO drivers (user_id, vehicle_type, license_plate) VALUES (?, ?, ?)",
+        [userId, driverData.vehicle_type, driverData.license_plate]
+      );
+  
+      await connection.commit();
+      return getDriverById(driverResult.insertId);
+    } catch (error) {
+      await connection.rollback();
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return { data: null, error: `Transaction failed: ${errorMessage}` };
+    } finally {
+      connection.release();
+    }
 }
 
 export async function updateDriver(driverId: number, driverData: any) {
-  const connection = await db.getConnection()
-  try {
-    await connection.beginTransaction()
-
-    const [rows] = await connection.execute<RowDataPacket[]>("SELECT user_id FROM drivers WHERE id = ?", [driverId])
-    if (rows.length === 0) throw new Error("Driver not found")
-
-    const userId = rows[0].user_id
-
-    const userFields: string[] = []
-    const userValues: any[] = []
-    if (driverData.full_name) {
-      userFields.push("full_name = ?")
-      userValues.push(driverData.full_name)
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+  
+      const [rows] = await connection.execute<RowDataPacket[]>("SELECT user_id FROM drivers WHERE id = ?", [driverId]);
+      if (rows.length === 0) throw new Error("Driver not found");
+  
+      const userId = rows[0].user_id;
+  
+      const userFields: string[] = [];
+      const userValues: any[] = [];
+      if (driverData.full_name) {
+        userFields.push("full_name = ?");
+        userValues.push(driverData.full_name);
+      }
+      if (driverData.email) {
+        userFields.push("email = ?");
+        userValues.push(driverData.email);
+      }
+      if (driverData.phone) {
+        userFields.push("phone = ?");
+        userValues.push(driverData.phone);
+      }
+      if (userFields.length > 0) {
+        await connection.execute(`UPDATE users SET ${userFields.join(", ")}, updated_at = NOW() WHERE id = ?`, [
+          ...userValues,
+          userId,
+        ]);
+      }
+  
+      const driverFields: string[] = [];
+      const driverValues: any[] = [];
+      if (driverData.vehicle_type) {
+        driverFields.push("vehicle_type = ?");
+        driverValues.push(driverData.vehicle_type);
+      }
+      if (driverData.license_plate) {
+        driverFields.push("license_plate = ?");
+        driverValues.push(driverData.license_plate);
+      }
+      if (driverFields.length > 0) {
+        await connection.execute(`UPDATE drivers SET ${driverFields.join(", ")} WHERE id = ?`, [...driverValues, driverId]);
+      }
+  
+      await connection.commit();
+      return getDriverById(driverId);
+    } catch (error) {
+      await connection.rollback();
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return { data: null, error: `Transaction failed: ${errorMessage}` };
+    } finally {
+      connection.release();
     }
-    if (driverData.email) {
-      userFields.push("email = ?")
-      userValues.push(driverData.email)
-    }
-    if (driverData.phone) {
-      userFields.push("phone = ?")
-      userValues.push(driverData.phone)
-    }
-    if (userFields.length > 0) {
-      await connection.execute(`UPDATE users SET ${userFields.join(", ")}, updated_at = NOW() WHERE id = ?`, [
-        ...userValues,
-        userId,
-      ])
-    }
-
-    const driverFields: string[] = []
-    const driverValues: any[] = []
-    if (driverData.vehicle_type) {
-      driverFields.push("vehicle_type = ?")
-      driverValues.push(driverData.vehicle_type)
-    }
-    if (driverData.license_plate) {
-      driverFields.push("license_plate = ?")
-      driverValues.push(driverData.license_plate)
-    }
-    if (driverFields.length > 0) {
-      await connection.execute(`UPDATE drivers SET ${driverFields.join(", ")} WHERE id = ?`, [...driverValues, driverId])
-    }
-
-    await connection.commit()
-    return getDriverById(driverId)
-  } catch (error) {
-    await connection.rollback()
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    return { data: null, error: `Transaction failed: ${errorMessage}` }
-  } finally {
-    connection.release()
-  }
 }
+  
 
 export async function deleteDriver(driverId: number) {
-  const connection = await db.getConnection()
-  try {
-    await connection.beginTransaction()
-
-    const [rows] = await connection.execute<RowDataPacket[]>("SELECT user_id FROM drivers WHERE id = ?", [driverId])
-    if (rows.length === 0) {
-      throw new Error("Driver not found")
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+  
+      const [rows] = await connection.execute<RowDataPacket[]>("SELECT user_id FROM drivers WHERE id = ?", [driverId]);
+      if (rows.length === 0) {
+        throw new Error("Driver not found");
+      }
+      const userId = rows[0].user_id;
+  
+      await connection.execute("DELETE FROM drivers WHERE id = ?", [driverId]);
+      await connection.execute("DELETE FROM users WHERE id = ?", [userId]);
+  
+      await connection.commit();
+      return { data: { success: true }, error: null };
+    } catch (error) {
+      await connection.rollback();
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return { data: null, error: `Transaction failed: ${errorMessage}` };
+    } finally {
+      connection.release();
     }
-    const userId = rows[0].user_id
-
-    await connection.execute("DELETE FROM drivers WHERE id = ?", [driverId])
-    await connection.execute("DELETE FROM users WHERE id = ?", [userId])
-
-    await connection.commit()
-    return { data: { success: true }, error: null }
-  } catch (error) {
-    await connection.rollback()
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    return { data: null, error: `Transaction failed: ${errorMessage}` }
-  } finally {
-    connection.release()
-  }
 }
 
 export async function getOnlineDrivers() {
@@ -439,15 +440,15 @@ export async function getOnlineDrivers() {
     JOIN users u ON d.user_id = u.id
     WHERE d.is_online = true
     ORDER BY d.last_location_update DESC
-  `
-  const { data, error } = await executeQuery<RowDataPacket[]>(query)
-  if (error) return { data: null, error }
+  `;
+  const { data, error } = await executeQuery<RowDataPacket[]>(query);
+  if (error) return { data: null, error };
 
   const drivers = data?.map((driver: any) => ({
     ...driver,
     user: JSON.parse(driver.user),
-  }))
-  return { data: drivers, error: null }
+  }));
+  return { data: drivers, error: null };
 }
 
 export async function updateDriverLocation(driverId: number, lat: number, lng: number) {
@@ -455,18 +456,15 @@ export async function updateDriverLocation(driverId: number, lat: number, lng: n
     lat,
     lng,
     driverId,
-  ])
+  ]);
 }
 
 export async function setDriverOnlineStatus(driverId: number, isOnline: boolean) {
-  return executeQuery("UPDATE drivers SET is_online = ?, last_location_update = NOW() WHERE id = ?", [isOnline, driverId])
+  return executeQuery("UPDATE drivers SET is_online = ?, last_location_update = NOW() WHERE id = ?", [isOnline, driverId]);
 }
 
 // ================== DELIVERY ZONES ==================
 
-// The 'area' column now stores the GeoJSON object as a string.
-// The frontend expects a property 'area_geojson' to parse.
-// We alias 'area' to 'area_geojson' to match the frontend's expectation without changing the API route.
 export async function getAllDeliveryZones() {
   const query = "SELECT *, area as area_geojson FROM delivery_zones";
   return executeQuery(query);
@@ -477,7 +475,6 @@ export async function getDeliveryZoneById(id: number) {
   const { data, error } = await executeQuery<RowDataPacket[]>(query, [id]);
   if (error) return { data: null, error };
 
-  // The API route will parse the 'area_geojson' string.
   const zone = data?.[0] || null;
   return { data: zone, error: null };
 }
@@ -485,7 +482,6 @@ export async function getDeliveryZoneById(id: number) {
 export async function createDeliveryZone(zoneData: any) {
   const { name, description, delivery_fee, minimum_order, color, is_active, area } = zoneData;
 
-  // The 'area' object from the frontend is stringified and stored in the 'area' column.
   const areaJson = JSON.stringify(area);
 
   const query = `
@@ -508,16 +504,12 @@ export async function createDeliveryZone(zoneData: any) {
     return { data: null, error: "Failed to create delivery zone, no insertId returned." };
   }
   
-  // After creation, we fetch the complete zone data to return to the client.
   return getDeliveryZoneById(data.insertId);
 }
 
 export async function updateDeliveryZone(id: number, zoneData: any) {
   const { name, description, delivery_fee, minimum_order, color, is_active, area } = zoneData;
-
-  // The 'area' object from the frontend is stringified for storage.
   const areaJson = JSON.stringify(area);
-
   const query = `
     UPDATE delivery_zones
     SET name = ?, description = ?, delivery_fee = ?, minimum_order = ?, color = ?, is_active = ?, area = ?
@@ -536,7 +528,6 @@ export async function updateDeliveryZone(id: number, zoneData: any) {
   ]);
 
   if (error) return { data: null, error };
-  // After update, we fetch the complete zone data to return to the client.
   return getDeliveryZoneById(id);
 }
 
@@ -549,21 +540,21 @@ export async function deleteDeliveryZone(id: number) {
 // ================== NOTIFICATIONS ==================
 export async function createNotification(data: any) {
   const insertQuery =
-    "INSERT INTO notifications (user_id, order_id, title, message, type) VALUES (?, ?, ?, ?, ?)"
+    "INSERT INTO notifications (user_id, order_id, title, message, type) VALUES (?, ?, ?, ?, ?)";
   const { data: result, error } = await executeQuery<ResultSetHeader>(insertQuery, [
     data.user_id,
     data.order_id || null,
     data.title,
     data.message,
     data.type,
-  ])
-  if (error) return { data: null, error }
+  ]);
+  if (error) return { data: null, error };
   if (!result) {
     return { data: null, error: "Failed to create notification." };
   }
-  const selectQuery = "SELECT * FROM notifications WHERE id = ?"
-  const { data: newData, error: newError } = await executeQuery<RowDataPacket[]>(selectQuery, [result.insertId])
-  return { data: newData?.[0] || null, error: newError }
+  const selectQuery = "SELECT * FROM notifications WHERE id = ?";
+  const { data: newData, error: newError } = await executeQuery<RowDataPacket[]>(selectQuery, [result.insertId]);
+  return { data: newData?.[0] || null, error: newError };
 }
 
 // ================== USERS ==================
@@ -590,30 +581,30 @@ export async function deleteUser(id: number) {
 
 // ================== PRODUCTS ==================
 export async function getAllProducts(storeId?: number) {
-  let query = "SELECT * FROM products"
-  const values: any[] = []
+  let query = "SELECT * FROM products";
+  const values: any[] = [];
 
   if (storeId) {
-    query += " WHERE store_id = ?"
-    values.push(storeId)
+    query += " WHERE store_id = ?";
+    values.push(storeId);
   }
 
-  query += " ORDER BY name ASC"
-  return executeQuery(query, values)
+  query += " ORDER BY name ASC";
+  return executeQuery(query, values);
 }
 
 export async function getProductById(productId: number) {
-  const query = "SELECT * FROM products WHERE id = ?"
-  const { data, error } = await executeQuery<RowDataPacket[]>(query, [productId])
-  return { data: data?.[0] || null, error }
+  const query = "SELECT * FROM products WHERE id = ?";
+  const { data, error } = await executeQuery<RowDataPacket[]>(query, [productId]);
+  return { data: data?.[0] || null, error };
 }
 
 export async function createProduct(productData: any) {
-  const { name, description, price, storeId, imageUrl, sku, stock, isAvailable } = productData
+  const { name, description, price, storeId, imageUrl, sku, stock, isAvailable } = productData;
   const query = `
     INSERT INTO products (name, description, price, store_id, image_url, sku, stock, is_available)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `
+  `;
   const { data: result, error } = await executeQuery<ResultSetHeader>(query, [
     name,
     description || null,
@@ -623,43 +614,42 @@ export async function createProduct(productData: any) {
     sku || null,
     stock || null,
     isAvailable !== undefined ? isAvailable : true,
-  ])
+  ]);
 
-  if (error) return { data: null, error }
+  if (error) return { data: null, error };
   if (!result) {
     return { data: null, error: "Failed to create product." };
   }
-  return getProductById(result.insertId)
+  return getProductById(result.insertId);
 }
 
 export async function updateProduct(productId: number, productData: any) {
-  const fields: string[] = []
-  const values: any[] = []
+  const fields: string[] = [];
+  const values: any[] = [];
 
   for (const key in productData) {
-    // Map camelCase to snake_case for database columns
-    const dbColumn = key.replace(/([a-z0-9]|(?=[A-Z]))([A-Z])/g, '$1_$2').toLowerCase()
+    const dbColumn = key.replace(/([a-z0-9]|(?=[A-Z]))([A-Z])/g, '$1_$2').toLowerCase();
     if (productData[key] !== undefined) {
-      fields.push(`${dbColumn} = ?`)
-      values.push(productData[key])
+      fields.push(`${dbColumn} = ?`);
+      values.push(productData[key]);
     }
   }
 
   if (fields.length === 0) {
-    return { data: null, error: "No fields to update." }
+    return { data: null, error: "No fields to update." };
   }
 
-  const query = `UPDATE products SET ${fields.join(", ")}, updated_at = NOW() WHERE id = ?`
-  const { error } = await executeQuery(query, [...values, productId])
+  const query = `UPDATE products SET ${fields.join(", ")}, updated_at = NOW() WHERE id = ?`;
+  const { error } = await executeQuery(query, [...values, productId]);
 
-  if (error) return { data: null, error }
-  return getProductById(productId)
+  if (error) return { data: null, error };
+  return getProductById(productId);
 }
 
 export async function deleteProduct(productId: number) {
-  const query = "DELETE FROM products WHERE id = ?"
-  const { error } = await executeQuery(query, [productId])
-  return { data: { success: !error }, error }
+  const query = "DELETE FROM products WHERE id = ?";
+  const { error } = await executeQuery(query, [productId]);
+  return { data: { success: !error }, error };
 }
 
 
@@ -687,7 +677,7 @@ export async function getDeliveryTrackingByOrderId(orderId: number) {
 // ================== STATS ==================
 
 export async function getStats() {
-    const connection = await db.getConnection();
+    const connection = await pool.getConnection();
     try {
         const [users] = await connection.execute<RowDataPacket[]>("SELECT COUNT(*) as count FROM users");
         const [customers] = await connection.execute<RowDataPacket[]>("SELECT COUNT(*) as count FROM customers");
@@ -699,13 +689,13 @@ export async function getStats() {
         const [ordersByStatus] = await connection.execute<RowDataPacket[]>("SELECT status, COUNT(*) as count FROM orders GROUP BY status");
 
         const stats = {
-            users: users[0].count,
-            customers: customers[0].count,
-            drivers: drivers[0].count,
-            orders: orders[0].count,
-            products: products[0].count,
-            stores: stores[0].count,
-            totalRevenue: totalRevenueResult[0].total || 0,
+            users: (users[0] as any).count,
+            customers: (customers[0] as any).count,
+            drivers: (drivers[0] as any).count,
+            orders: (orders[0] as any).count,
+            products: (products[0] as any).count,
+            stores: (stores[0] as any).count,
+            totalRevenue: (totalRevenueResult[0] as any).total || 0,
             ordersByStatus: ordersByStatus,
         };
 
@@ -714,6 +704,6 @@ export async function getStats() {
         const errorMessage = error instanceof Error ? error.message : String(error);
         return { data: null, error: `Failed to get stats: ${errorMessage}` };
     } finally {
-        connection.release();
+        if (connection) connection.release();
     }
 }

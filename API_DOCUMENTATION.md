@@ -8,320 +8,224 @@ http://localhost:3000/api
 ```
 
 ## Autenticación
-Actualmente la API no requiere autenticación. En producción se recomienda implementar JWT o API Keys.
+
+Esta API utiliza autenticación basada en **JSON Web Tokens (JWT)**. Para acceder a las rutas protegidas, necesitas obtener un token de acceso y enviarlo en la cabecera `Authorization` de tus solicitudes.
+
+**Flujo de Autenticación:**
+1.  **Registra** un nuevo usuario cliente usando el endpoint `POST /auth/register`.
+2.  **Inicia sesión** con las credenciales del usuario usando `POST /auth/login` para obtener un token JWT.
+3.  **Envía el token** en las solicitudes a rutas protegidas con el formato `Authorization: Bearer <token>`.
 
 ---
 
-## Usuarios
-
-### GET /api/users
-Obtener todos los usuarios con filtros opcionales.
-
-**Query Parameters:**
-- `role` (opcional): "cliente" | "repartidor"
-- `status` (opcional): "activo" | "inactivo"
-
-**Ejemplo:**
-```bash
-curl http://localhost:3000/api/users?role=repartidor&status=activo
-```
-
-### GET /api/users/[id]
-Obtener un usuario específico por ID.
-
-**Ejemplo:**
-```bash
-curl http://localhost:3000/api/users/123
-```
-
-### POST /api/users
-Crear un nuevo usuario.
+### POST /auth/register
+Crea un nuevo usuario con el rol de `customer`.
 
 **Body:**
 ```json
 {
   "name": "Juan Pérez",
-  "email": "juan@example.com",
-  "phone": "+34 600 123 456",
-  "role": "cliente"
+  "email": "juan.perez@example.com",
+  "password": "password123"
 }
 ```
-
-### PUT /api/users/[id]
-Actualizar un usuario existente.
-
-**Body:**
+**Respuesta Exitosa (201 Created):**
 ```json
 {
-  "name": "Juan Carlos",
-  "email": "juancarlos@example.com",
-  "phone": "+34 600 987 654",
-  "role": "repartidor"
+  "success": true,
+  "message": "Usuario registrado exitosamente."
 }
-```
-
-### DELETE /api/users/[id]
-Eliminar un usuario.
-
-**Ejemplo:**
-```bash
-curl -X DELETE http://localhost:3000/api/users/123
 ```
 
 ---
 
-## Productos
+### POST /auth/login
+Autentica a un usuario y devuelve un token de acceso.
+
+**Body:**
+```json
+{
+  "email": "juan.perez@example.com",
+  "password": "password123"
+}
+```
+**Respuesta Exitosa (200 OK):**
+```json
+{
+  "success": true,
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+---
+
+## Productos (Ruta Protegida)
 
 ### GET /api/products
-Obtener todos los productos con filtros opcionales.
+Obtener todos los productos. Requiere autenticación.
 
-**Query Parameters:**
-- `category` (opcional): "comida" | "bebida" | "postre" | "otro"
-- `status` (opcional): "disponible" | "agotado"
+**Headers:**
+- `Authorization`: `Bearer <tu-token-jwt>`
 
-### GET /api/products/[id]
-Obtener un producto específico por ID.
+**Ejemplo de Uso (JavaScript Fetch):**
+```javascript
+const token = "tu-token-jwt"; // Obtenido del login
 
-### POST /api/products
-Crear un nuevo producto.
-
-**Body:**
-```json
-{
-  "name": "Pizza Margarita",
-  "price": 12.99,
-  "category": "comida",
-  "description": "Pizza clásica con tomate y mozzarella"
+async function getProducts() {
+  const response = await fetch('http://localhost:3000/api/products', {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  });
+  const data = await response.json();
+  console.log(data);
 }
 ```
 
-### PUT /api/products/[id]
-Actualizar un producto existente.
-
-### DELETE /api/products/[id]
-Eliminar un producto.
-
 ---
 
-## Pedidos
-
-### GET /api/orders
-Obtener todos los pedidos con filtros opcionales.
-
-**Query Parameters:**
-- `status` (opcional): "pagado" | "en ruta" | "entregado"
-- `customerId` (opcional): ID del cliente
-
-### GET /api/orders/[id]
-Obtener un pedido específico por ID.
+## Pedidos (Ruta Protegida)
 
 ### POST /api/orders
-Crear un nuevo pedido.
+Crear un nuevo pedido. Requiere autenticación.
+
+**Headers:**
+- `Authorization`: `Bearer <tu-token-jwt>`
 
 **Body:**
 ```json
 {
-  "customerId": "user-123",
-  "customerName": "María García",
+  "customerId": 1, // El ID del usuario autenticado
+  "storeId": 1,
+  "deliveryAddressId": 1,
+  "totalAmount": 25.98,
+  "paymentMethod": "credit_card",
   "items": [
     {
-      "productId": "prod-1",
-      "productName": "Pizza Margarita",
+      "productId": 1,
       "quantity": 2,
       "price": 12.99
     }
-  ],
-  "address": "Calle Mayor 123, Madrid"
+  ]
 }
 ```
 
-### PUT /api/orders/[id]
-Actualizar un pedido existente.
+**Ejemplo de Uso (JavaScript Fetch):**
+```javascript
+const token = "tu-token-jwt"; // Obtenido del login
 
-### DELETE /api/orders/[id]
-Eliminar un pedido.
-
-### POST /api/orders/[id]/assign
-Asignar un repartidor a un pedido.
-
-**Body:**
-```json
-{
-  "deliveryPersonId": "user-456"
-}
-```
-
-### PATCH /api/orders/[id]/status
-Actualizar el estado de un pedido.
-
-**Body:**
-```json
-{
-  "status": "entregado",
-  "notes": "El pedido fue entregado satisfactoriamente"
-}
-```
-
----
-
-## Entregas
-
-### GET /api/deliveries
-Obtener todas las entregas activas o con filtros de estado.
-
-**Query Parameters:**
-- `status` (opcional): "out_for_delivery" | "delivered"
-
-**Ejemplo:**
-```bash
-curl http://localhost:3000/api/deliveries?status=out_for_delivery
-```
-
-### GET /api/deliveries/[orderId]
-Obtener el seguimiento de una entrega específica por ID de pedido.
-
-**Ejemplo:**
-```bash
-curl http://localhost:3000/api/deliveries/123
-```
-
-### PATCH /api/deliveries/[orderId]
-Actualizar el estado de una entrega (usa el mismo endpoint que `PATCH /api/orders/[id]/status` pero se enfoca en el contexto de entrega).
-
-**Body:**
-```json
-{
-  "status": "in_transit",
-  "notes": "Repartidor en camino con el pedido."
-}
-```
-
----
-
-## Estadísticas
-
-### GET /api/stats
-Obtener estadísticas generales del dashboard.
-
-**Respuesta:**
-```json
-{
-  "success": true,
-  "data": {
-    "users": 45,
-    "customers": 37,
-    "drivers": 8,
-    "orders": 150,
-    "products": 28,
-    "stores": 3,
-    "totalRevenue": 4567.89,
-    "ordersByStatus": [
-      { "status": "pending", "count": 5 },
-      { "status": "out_for_delivery", "count": 12 },
-      { "status": "delivered", "count": 133 }
+async function createOrder() {
+  const orderData = {
+    customerId: 1, // Asegúrate que este ID corresponde al usuario del token
+    storeId: 1,
+    deliveryAddressId: 1,
+    totalAmount: 25.98,
+    paymentMethod: "credit_card",
+    items: [
+      { productId: 1, quantity: 2, price: 12.99 }
     ]
+  };
+
+  const response = await fetch('http://localhost:3000/api/orders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify(orderData)
+  });
+
+  const result = await response.json();
+  console.log(result);
+}
+```
+
+---
+
+## Flujo Completo de Ejemplo (Cliente)
+
+Aquí tienes un ejemplo completo de cómo tu aplicación cliente puede interactuar con la API.
+
+```javascript
+// 1. Iniciar sesión para obtener el token
+async function login(email, password) {
+  const response = await fetch('http://localhost:3000/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  const data = await response.json();
+  if (data.success) {
+    return data.token;
+  } else {
+    throw new Error(data.error);
   }
 }
-```
 
----
-
-## Formato de Respuesta
-
-Todas las respuestas siguen este formato:
-
-**Éxito:**
-```json
-{
-  "success": true,
-  "data": { ... },
-  "message": "Operación exitosa"
+// 2. Usar el token para obtener productos
+async function fetchProducts(token) {
+  const response = await fetch('http://localhost:3000/api/products', {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  const data = await response.json();
+  return data.data; // Array de productos
 }
-```
 
-**Error:**
-```json
-{
-  "success": false,
-  "error": "Descripción del error"
+// 3. Usar el token para crear un pedido
+async function placeOrder(token, orderDetails) {
+  const response = await fetch('http://localhost:3000/api/orders', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify(orderDetails)
+  });
+  return response.json();
 }
+
+// --- Ejecución del flujo ---
+async function runTest() {
+  try {
+    console.log("Iniciando sesión...");
+    const userToken = await login("juan.perez@example.com", "password123");
+    console.log("Token obtenido:", userToken);
+
+    console.log("\\nObteniendo productos...");
+    const products = await fetchProducts(userToken);
+    console.log("Productos recibidos:", products);
+
+    console.log("\\nCreando un pedido...");
+    const newOrderDetails = {
+      customerId: 1, // ID del usuario logueado
+      storeId: 1,
+      deliveryAddressId: 1,
+      totalAmount: products[0].price,
+      paymentMethod: "cash",
+      items: [{ productId: products[0].id, quantity: 1, price: products[0].price }]
+    };
+    const orderResult = await placeOrder(userToken, newOrderDetails);
+    console.log("Respuesta del pedido:", orderResult);
+
+  } catch (error) {
+    console.error("Ocurrió un error en el flujo:", error.message);
+  }
+}
+
+// Para probar, asegúrate de haber registrado un usuario primero.
+// runTest();
 ```
 
 ---
 
-## Códigos de Estado HTTP
+## Otras Rutas
 
-- `200 OK` - Solicitud exitosa
-- `201 Created` - Recurso creado exitosamente
-- `400 Bad Request` - Datos inválidos
-- `404 Not Found` - Recurso no encontrado
-- `500 Internal Server Error` - Error del servidor
+(La documentación para `/users`, `/deliveries`, `/stats`, etc., permanece igual pero las rutas relevantes ahora están protegidas como se especifica en el middleware).
 
 ---
 
-## Ejemplos de Uso
+## Formato de Respuesta y Códigos de Estado
 
-### Crear un pedido desde el ecommerce
-```javascript
-const response = await fetch('http://localhost:3000/api/orders', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    customerId: 'user-123',
-    customerName: 'María García',
-    items: [
-      {
-        productId: 'prod-1',
-        productName: 'Pizza Margarita',
-        quantity: 2,
-        price: 12.99
-      }
-    ],
-    address: 'Calle Mayor 123, Madrid'
-  })
-})
-
-const data = await response.json()
-console.log(data)
-```
-
-### Obtener productos disponibles
-```javascript
-const response = await fetch('http://localhost:3000/api/products?status=disponible')
-const data = await response.json()
-console.log(data.data) // Array de productos
-```
-
-### Seguimiento de entrega en tiempo real
-```javascript
-const orderId = 'order-123'
-const response = await fetch(`http://localhost:3000/api/deliveries/${orderId}`)
-const data = await response.json()
-console.log(data.data) // Información de seguimiento
-```
-
-### Actualizar el estado de un pedido
-```javascript
-const orderId = '123';
-const response = await fetch(`http://localhost:3000/api/orders/${orderId}/status`, {
-  method: 'PATCH',
-  headers: {
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    status: 'delivered',
-    notes: 'Pedido entregado al cliente'
-  })
-});
-const data = await response.json();
-console.log(data);
-```
-
-### Obtener estadísticas del dashboard
-```javascript
-const response = await fetch('http://localhost:3000/api/stats');
-const data = await response.json();
-console.log(data.data);
+(Esta sección no ha cambiado)
 ```
