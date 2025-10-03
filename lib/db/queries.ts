@@ -13,17 +13,25 @@ const orderQueryFields = `
   JSON_OBJECT('id', ca.id,'address_line1', ca.address_line1,'city', ca.city,'lat', ca.lat,'lng', ca.lng) as delivery_address
 `
 
-export async function getAllOrders() {
-  const query = `
+export async function getAllOrders(status?: string) {
+  let query = `
     SELECT ${orderQueryFields}
     FROM orders o
     JOIN customers c ON o.customer_id = c.id
     JOIN users u ON c.user_id = u.id
     JOIN stores s ON o.store_id = s.id
     JOIN customer_addresses ca ON o.delivery_address_id = ca.id
-    ORDER BY o.created_at DESC
   `
-  return executeQuery(query)
+  const values: any[] = []
+
+  if (status) {
+    query += ` WHERE o.status = ?`
+    values.push(status)
+  }
+
+  query += ` ORDER BY o.created_at DESC`
+
+  return executeQuery(query, values)
 }
 
 export async function getUsersByRole(user_id?: string){
@@ -67,6 +75,28 @@ export async function createOrder(orderData: any) {
   try {
     await connection.beginTransaction()
 
+    // 1. Verificar que todos los productos existen y pertenecen a la tienda correcta
+    const productIds = orderData.items.map((item: any) => item.productId)
+    const [existingProducts] = await connection.execute<RowDataPacket[]>(
+      `SELECT id, price FROM products WHERE id IN (${productIds.map(() => '?').join(',')}) AND store_id = ?`,
+      [...productIds, orderData.storeId]
+    )
+
+    if (existingProducts.length !== productIds.length) {
+      throw new Error('Algunos productos no existen o no pertenecen a la tienda seleccionada.')
+    }
+
+    // 2. Calcular el monto total del pedido
+    let totalAmount = 0
+    const productPriceMap = new Map(existingProducts.map(p => [p.id, p.price]))
+
+    for (const item of orderData.items) {
+      const price = productPriceMap.get(item.productId)
+      if (price) {
+        totalAmount += parseFloat(price) * item.quantity
+      }
+    }
+
     const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`
     const orderQuery = `
       INSERT INTO orders (order_number, customer_id, store_id, delivery_address_id, status, subtotal, delivery_fee, tax, total, payment_method, special_instructions)
@@ -74,15 +104,15 @@ export async function createOrder(orderData: any) {
     `
     const [orderResult] = await connection.execute<ResultSetHeader>(orderQuery, [
       orderNumber,
-      orderData.customer_id,
-      orderData.store_id,
-      orderData.delivery_address_id,
-      orderData.subtotal,
-      orderData.delivery_fee,
-      orderData.tax,
-      orderData.total,
-      orderData.payment_method,
-      orderData.special_instructions || null,
+      orderData.customerId,
+      orderData.storeId,
+      orderData.deliveryAddressId,
+      totalAmount.toFixed(2),
+      orderData.delivery_fee || 0,
+      orderData.tax || 0,
+      (totalAmount + (orderData.delivery_fee || 0) + (orderData.tax || 0)).toFixed(2),
+      orderData.paymentMethod,
+      orderData.notes || null,
     ])
 
     const orderId = orderResult.insertId
@@ -93,10 +123,9 @@ export async function createOrder(orderData: any) {
     `
     const itemsValues = orderData.items.map((item: any) => [
       orderId,
-      item.product_id,
-      item.quantity,
-      item.unit_price,
-      item.subtotal,
+      item.productId,
+      productPriceMap.get(item.productId),
+      (parseFloat(productPriceMap.get(item.productId)) * item.quantity).toFixed(2),
     ])
     await connection.query(itemsQuery, [itemsValues])
 
@@ -528,4 +557,153 @@ export async function createNotification(data: any) {
   const selectQuery = "SELECT * FROM notifications WHERE id = ?"
   const { data: newData, error: newError } = await executeQuery<RowDataPacket[]>(selectQuery, [result?.insertId])
   return { data: newData?.[0] || null, error: newError }
+}
+
+// ================== USERS ==================
+
+export async function getUserById(id: number) {
+  const query = "SELECT id, name, email, phone, role, createdAt, updatedAt FROM users WHERE id = ?";
+  const { data, error } = await executeQuery<RowDataPacket[]>(query, [id]);
+  return { data: data?.[0] || null, error };
+}
+
+export async function updateUser(id: number, userData: any) {
+    const { name, email, phone, role } = userData;
+    const query = "UPDATE users SET name = ?, email = ?, phone = ?, role = ? WHERE id = ?";
+    const { error } = await executeQuery(query, [name, email, phone, role, id]);
+    if (error) return { data: null, error };
+    return getUserById(id);
+}
+
+export async function deleteUser(id: number) {
+    const query = "DELETE FROM users WHERE id = ?";
+    const { error } = await executeQuery(query, [id]);
+    return { data: { success: !error }, error };
+}
+
+// ================== PRODUCTS ==================
+export async function getAllProducts(storeId?: number) {
+  let query = "SELECT * FROM products"
+  const values: any[] = []
+
+  if (storeId) {
+    query += " WHERE store_id = ?"
+    values.push(storeId)
+  }
+
+  query += " ORDER BY name ASC"
+  return executeQuery(query, values)
+}
+
+export async function getProductById(productId: number) {
+  const query = "SELECT * FROM products WHERE id = ?"
+  const { data, error } = await executeQuery<RowDataPacket[]>(query, [productId])
+  return { data: data?.[0] || null, error }
+}
+
+export async function createProduct(productData: any) {
+  const { name, description, price, storeId, imageUrl, sku, stock, isAvailable } = productData
+  const query = `
+    INSERT INTO products (name, description, price, store_id, image_url, sku, stock, is_available)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `
+  const { data: result, error } = await executeQuery<ResultSetHeader>(query, [
+    name,
+    description || null,
+    price,
+    storeId,
+    imageUrl || null,
+    sku || null,
+    stock || null,
+    isAvailable !== undefined ? isAvailable : true,
+  ])
+
+  if (error) return { data: null, error }
+  return getProductById(result.insertId)
+}
+
+export async function updateProduct(productId: number, productData: any) {
+  const fields: string[] = []
+  const values: any[] = []
+
+  for (const key in productData) {
+    // Map camelCase to snake_case for database columns
+    const dbColumn = key.replace(/([a-z0-9]|(?=[A-Z]))([A-Z])/g, '$1_$2').toLowerCase()
+    if (productData[key] !== undefined) {
+      fields.push(`${dbColumn} = ?`)
+      values.push(productData[key])
+    }
+  }
+
+  if (fields.length === 0) {
+    return { data: null, error: "No fields to update." }
+  }
+
+  const query = `UPDATE products SET ${fields.join(", ")}, updated_at = NOW() WHERE id = ?`
+  const { error } = await executeQuery(query, [...values, productId])
+
+  if (error) return { data: null, error }
+  return getProductById(productId)
+}
+
+export async function deleteProduct(productId: number) {
+  const query = "DELETE FROM products WHERE id = ?"
+  const { error } = await executeQuery(query, [productId])
+  return { data: { success: !error }, error }
+}
+
+
+// ================== DELIVERIES ==================
+
+export async function getDeliveries() {
+  const query = `
+    SELECT ${orderQueryFields}
+    FROM orders o
+    JOIN customers c ON o.customer_id = c.id
+    JOIN users u ON c.user_id = u.id
+    JOIN stores s ON o.store_id = s.id
+    JOIN customer_addresses ca ON o.delivery_address_id = ca.id
+    WHERE o.status IN ('out_for_delivery', 'delivered')
+    ORDER BY o.updated_at DESC
+  `;
+  return executeQuery(query);
+}
+
+export async function getDeliveryTrackingByOrderId(orderId: number) {
+  const query = "SELECT * FROM order_tracking WHERE order_id = ? ORDER BY createdAt DESC";
+  return executeQuery(query, [orderId]);
+}
+
+// ================== STATS ==================
+
+export async function getStats() {
+    const connection = await db.getConnection();
+    try {
+        const [users] = await connection.execute<RowDataPacket[]>("SELECT COUNT(*) as count FROM users");
+        const [customers] = await connection.execute<RowDataPacket[]>("SELECT COUNT(*) as count FROM customers");
+        const [drivers] = await connection.execute<RowDataPacket[]>("SELECT COUNT(*) as count FROM drivers");
+        const [orders] = await connection.execute<RowDataPacket[]>("SELECT COUNT(*) as count FROM orders");
+        const [products] = await connection.execute<RowDataPacket[]>("SELECT COUNT(*) as count FROM products");
+        const [stores] = await connection.execute<RowDataPacket[]>("SELECT COUNT(*) as count FROM stores");
+        const [totalRevenueResult] = await connection.execute<RowDataPacket[]>("SELECT SUM(total_amount) as total FROM orders WHERE payment_status = 'paid'");
+        const [ordersByStatus] = await connection.execute<RowDataPacket[]>("SELECT status, COUNT(*) as count FROM orders GROUP BY status");
+
+        const stats = {
+            users: users[0].count,
+            customers: customers[0].count,
+            drivers: drivers[0].count,
+            orders: orders[0].count,
+            products: products[0].count,
+            stores: stores[0].count,
+            totalRevenue: totalRevenueResult[0].total || 0,
+            ordersByStatus: ordersByStatus,
+        };
+
+        return { data: stats, error: null };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        return { data: null, error: `Failed to get stats: ${errorMessage}` };
+    } finally {
+        connection.release();
+    }
 }

@@ -1,160 +1,307 @@
-'use client';
+"use client"
 
-import { useState, useEffect, useCallback } from 'react';
-import { GoogleMap, useJsApiLoader, Polygon, DrawingManager } from '@react-google-maps/api';
-import { Button } from '@/components/ui/button';
-import { toast } from '@/hooks/use-toast';
+import type React from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
+import { useToast } from "@/hooks/use-toast"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Loader2, MapPin, Save, Trash2, Edit, X, PlusCircle } from "lucide-react"
+import type { DeliveryZone, Area } from "@/lib/types/database"
+import { DeliveryZoneMap } from "./DeliveryZoneMap"
+import { Switch } from "@/components/ui/switch"
 
-// Estilos y configuración inicial del mapa
-const containerStyle = {
-    width: '100%',
-    height: '70vh',
-    borderRadius: '0.5rem',
-};
-
-const center = {
-    lat: 20.659698, // Coordenadas centradas en Guadalajara, ajusta según tu necesidad
-    lng: -103.349609,
-};
-
-// Definimos el tipo para nuestras zonas
-interface DeliveryZone {
-    id: number;
-    name: string;
-    area: string; // El área viene como un string JSON desde la BD
-}
+const GOOGLE_MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ""
 
 export function ZonesMapEditor() {
-    const [zones, setZones] = useState<DeliveryZone[]>([]);
-    const { isLoaded, loadError } = useJsApiLoader({
-        id: 'google-map-script',
-        googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY!,
-        libraries: ['drawing', 'geometry'],
-    });
+  const { toast } = useToast()
+  const [zones, setZones] = useState<DeliveryZone[]>([])
+  const [selectedZone, setSelectedZone] = useState<Partial<DeliveryZone> | null>(null)
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
 
-    // Función para cargar las zonas desde la API
-    const fetchZones = useCallback(async () => {
-        try {
-            const response = await fetch('/api/delivery-zones');
-            if (!response.ok) throw new Error('Error al cargar las zonas');
-            const data = await response.json();
-            setZones(data.data);
-        } catch (error) {
-            toast({
-                title: 'Error',
-                description: 'No se pudieron cargar las zonas de entrega.',
-                variant: 'destructive',
-            });
-        }
-    }, []);
+  const fetchZones = useCallback(async () => {
+    setLoading(true)
+    try {
+      const response = await fetch("/api/delivery-zones")
+      const data = await response.json()
+      if (response.ok && data.success) {
+        setZones(data.data || [])
+      } else {
+        toast({ title: "Error de Carga", description: data.error || "No se pudieron cargar las zonas.", variant: "destructive" })
+      }
+    } catch (error) {
+      toast({ title: "Error de Conexión", description: "No se pudo comunicar con el servidor para obtener las zonas.", variant: "destructive" })
+    } finally {
+      setLoading(false)
+    }
+  }, [toast])
 
-    useEffect(() => {
-        fetchZones();
-    }, [fetchZones]);
+  useEffect(() => {
+    fetchZones()
+  }, [fetchZones])
 
-    // Manejador para cuando se completa el dibujo de un nuevo polígono
-    const onPolygonComplete = async (polygon: google.maps.Polygon) => {
-        const coordinates = polygon.getPath().getArray().map(latLng => [latLng.lng(), latLng.lat()]);
+  const handleNewZoneClick = () => {
+    setSelectedZone(null)
+    setIsDrawing(true)
+    toast({ title: "Modo de Dibujo Activado", description: "Dibuja un polígono o un círculo en el mapa para crear una nueva zona." })
+  }
 
-        // Para un polígono GeoJSON válido, el primer y último punto deben coincidir.
-        coordinates.push(coordinates[0]);
+  const handleShapeComplete = (area: Area, shape: google.maps.Polygon | google.maps.Circle) => {
+    setIsDrawing(false)
+    shape.setMap(null) // Remove the temporary shape from the drawing manager
+    setSelectedZone({
+      name: "",
+      description: "",
+      delivery_fee: 0,
+      minimum_order: 0,
+      color: `#${Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')}`,
+      is_active: true,
+      area,
+    })
+    toast({ title: "Forma Creada", description: "Rellena los detalles de la nueva zona y guárdala." })
+  }
 
-        const newZonePayload = {
-            name: `Nueva Zona ${zones.length + 1}`, // Nombre temporal
-            area: {
-                type: 'Polygon',
-                coordinates: [coordinates],
-            },
-        };
+  const handlePolygonComplete = (polygon: google.maps.Polygon) => {
+    const paths = polygon.getPath().getArray()
+    const coordinates = paths.map(p => ({ lat: p.lat(), lng: p.lng() }))
+    if (coordinates.length > 0) coordinates.push(coordinates[0]) // Close the loop
+    handleShapeComplete({ type: "Polygon", coordinates: [coordinates] }, polygon)
+  }
 
-        // Llamada a la API para guardar la nueva zona
-        try {
-            const response = await fetch('/api/delivery-zones', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(newZonePayload),
-            });
+  const handleCircleComplete = (circle: google.maps.Circle) => {
+    const center = circle.getCenter()!
+    const radius = circle.getRadius()
+    handleShapeComplete({ type: "Circle", coordinates: { lat: center.lat(), lng: center.lng() }, radius }, circle)
+  }
 
-            if (!response.ok) throw new Error('No se pudo guardar la zona.');
-
-            toast({
-                title: 'Éxito',
-                description: 'Nueva zona de entrega creada.',
-            });
-            fetchZones(); // Recargamos las zonas para mostrar la nueva
-        } catch (error) {
-            toast({
-                title: 'Error',
-                description: (error as Error).message,
-                variant: 'destructive',
-            });
-        }
-
-        polygon.setMap(null); // Eliminamos el polígono del mapa una vez guardado
-    };
-
-    if (loadError) {
-        return <div>Error al cargar el mapa. Asegúrate de que la clave de API de Google Maps sea correcta.</div>;
+  const handleSaveZone = async () => {
+    if (!selectedZone || !selectedZone.name) {
+      toast({ title: "Campo Requerido", description: "El nombre de la zona es obligatorio.", variant: "destructive" })
+      return
+    }
+    if (!selectedZone.area) {
+      toast({ title: "Área Requerida", description: "La zona debe tener un área definida en el mapa.", variant: "destructive" })
+      return
     }
 
-    return isLoaded ? (
-        <div className="space-y-4">
-            <GoogleMap
-                mapContainerStyle={containerStyle}
-                center={center}
-                zoom={12}
-                options={{
-                    streetViewControl: false,
-                    mapTypeControl: false,
-                }}
-            >
-                {/* Dibuja todas las zonas existentes en el mapa */}
-                {zones.map(zone => {
-                    const area = JSON.parse(zone.area);
-                    const paths = area.coordinates[0].map((coord: [number, number]) => ({ lat: coord[1], lng: coord[0] }));
-                    return (
-                        <Polygon
-                            key={zone.id}
-                            paths={paths}
-                            options={{
-                                fillColor: '#007BFF',
-                                fillOpacity: 0.2,
-                                strokeColor: '#007BFF',
-                                strokeOpacity: 0.8,
-                                strokeWeight: 2,
-                                clickable: true,
-                                draggable: false, // La edición de vértices se habilita con 'editable'
-                                editable: true,
-                            }}
-                            // Aquí podrías agregar lógica para actualizar la zona cuando se edita
-                            // onMouseUp={handlePolygonUpdate}
-                        />
-                    );
-                })}
+    setSubmitting(true)
+    try {
+      const url = selectedZone.id ? `/api/delivery-zones/${selectedZone.id}` : "/api/delivery-zones"
+      const method = selectedZone.id ? "PUT" : "POST"
 
-                {/* Componente de Google Maps para habilitar las herramientas de dibujo */}
-                <DrawingManager
-                    onPolygonComplete={onPolygonComplete}
-                    options={{
-                        drawingControl: true,
-                        drawingControlOptions: {
-                            position: window.google.maps.ControlPosition.TOP_CENTER,
-                            drawingModes: [window.google.maps.drawing.OverlayType.POLYGON],
-                        },
-                        polygonOptions: {
-                            fillColor: '#FFC107',
-                            fillOpacity: 0.3,
-                            strokeWeight: 2,
-                            clickable: false,
-                            editable: true,
-                            zIndex: 1,
-                        },
-                    }}
+      const response = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(selectedZone),
+      })
+
+      const result = await response.json()
+
+      if (result.success) {
+        toast({ title: "¡Éxito!", description: `Zona ${selectedZone.id ? "actualizada" : "guardada"} correctamente.` })
+        fetchZones() // Refetch all zones to get the source of truth
+        setSelectedZone(null)
+      } else {
+        toast({ title: "Error al Guardar", description: result.error, variant: "destructive" })
+      }
+    } catch (error) {
+      toast({ title: "Error de Conexión", description: "No se pudo conectar con el servidor para guardar la zona.", variant: "destructive" })
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleDeleteZone = async (id: number) => {
+    if (!confirm("¿Estás seguro? Esta acción no se puede deshacer.")) return
+
+    setSubmitting(true)
+    try {
+      const response = await fetch(`/api/delivery-zones/${id}`, { method: "DELETE" })
+      const result = await response.json()
+
+      if (result.success) {
+        toast({ title: "Eliminada", description: "La zona ha sido eliminada." })
+        setZones(prev => prev.filter(z => z.id !== id))
+        if (selectedZone?.id === id) {
+          setSelectedZone(null)
+        }
+      } else {
+        toast({ title: "Error al Eliminar", description: result.error, variant: "destructive" })
+      }
+    } catch (error) {
+      toast({ title: "Error de Conexión", description: "No se pudo conectar con el servidor.", variant: "destructive" })
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleSelectZone = (zoneId: number) => {
+    const zoneToSelect = zones.find(z => z.id === zoneId)
+    if (zoneToSelect) {
+      setSelectedZone(zoneToSelect)
+      setIsDrawing(false) // Cancel drawing mode if a zone is selected
+    }
+  }
+
+  const handleCancel = () => {
+    setSelectedZone(null)
+    setIsDrawing(false)
+  }
+
+  const displayedZones = useMemo(() => {
+    const existingZones = [...zones]
+    if (selectedZone && !selectedZone.id) {
+        // This is a new, unsaved zone. Add it to the map for preview.
+        return [...existingZones, selectedZone as DeliveryZone];
+    }
+    return existingZones;
+  }, [zones, selectedZone]);
+
+  return (
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <div className="lg:col-span-2 space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <MapPin className="h-5 w-5" />
+                <span>Mapa de Zonas</span>
+              </div>
+              <Button onClick={handleNewZoneClick} size="sm" disabled={isDrawing || submitting}>
+                <PlusCircle className="mr-2 h-4 w-4" />
+                Crear Zona
+              </Button>
+            </CardTitle>
+            <CardDescription>Dibuja polígonos o círculos para definir las áreas y sus costos de envío.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="relative h-[500px] w-full overflow-hidden rounded-lg border bg-muted">
+              {GOOGLE_MAPS_API_KEY ? (
+                <DeliveryZoneMap
+                  apiKey={GOOGLE_MAPS_API_KEY}
+                  zones={displayedZones}
+                  selectedZoneId={selectedZone?.id}
+                  onZoneClick={handleSelectZone}
+                  onPolygonComplete={handlePolygonComplete}
+                  onCircleComplete={handleCircleComplete}
+                  isDrawing={isDrawing}
                 />
-            </GoogleMap>
-            <p className="text-sm text-muted-foreground">
-                Usa la herramienta de polígono (□) en la parte superior del mapa para dibujar una nueva zona. Puedes arrastrar los puntos de las zonas existentes para editarlas.
-            </p>
-        </div>
-    ) : <div>Cargando mapa...</div>;
+              ) : (
+                <div className="flex h-full items-center justify-center p-4 text-center">
+                  <p className="text-destructive-foreground bg-destructive p-3 rounded-md">La clave de API de Google Maps no está configurada. Renombra la variable a NEXT_PUBLIC_GOOGLE_MAPS_API_KEY en tu .env.local y reinicia el servidor.</p>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Zonas Guardadas</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? (
+                <div className="flex items-center justify-center"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Cargando zonas...</div>
+            ) : zones.length > 0 ? (
+              <div className="space-y-2">
+                {zones.map(zone => (
+                  <div
+                    key={zone.id}
+                    className={`flex items-center justify-between rounded-lg border p-3 cursor-pointer transition-all ${selectedZone?.id === zone.id ? 'ring-2 ring-primary' : ''}`}
+                    onClick={() => handleSelectZone(zone.id)}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="h-8 w-8 rounded-full border-2" style={{ backgroundColor: `${zone.color}80`, borderColor: zone.color }} />
+                      <div>
+                        <div className="font-medium">{zone.name}</div>
+                        <Badge variant={zone.is_active ? "default" : "outline"}>{zone.is_active ? "Activa" : "Inactiva"}</Badge>
+                      </div>
+                    </div>
+                    <div className="text-right text-sm">
+                      <div>Costo: ${zone.delivery_fee.toFixed(2)}</div>
+                      <div>Mínimo: ${zone.minimum_order.toFixed(2)}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); handleSelectZone(zone.id); }}>
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button size="sm" variant="destructive" onClick={(e) => { e.stopPropagation(); zone.id && handleDeleteZone(zone.id); }} disabled={submitting}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-muted-foreground text-center py-4">No hay zonas creadas. ¡Crea tu primera zona en el mapa!</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="lg:col-span-1 h-fit sticky top-6">
+        <CardHeader>
+          <CardTitle>Configuración de Zona</CardTitle>
+          <CardDescription>Detalles de la zona seleccionada o de la nueva zona a crear.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {selectedZone ? (
+            <div className="space-y-4">
+                {isDrawing && <p className="text-sm text-center text-blue-500">Termina de dibujar en el mapa para continuar</p>}
+                <div className="space-y-2">
+                    <Label htmlFor="zone-name">Nombre</Label>
+                    <Input id="zone-name" value={selectedZone.name || ""} onChange={e => setSelectedZone(p => p && {...p, name: e.target.value })} placeholder="Ej: Zona Centro" />
+                </div>
+                <div className="space-y-2">
+                    <Label htmlFor="zone-description">Descripción (Opcional)</Label>
+                    <Textarea id="zone-description" value={selectedZone.description || ""} onChange={e => setSelectedZone(p => p && {...p, description: e.target.value })} rows={2} placeholder="Ej: Cobertura en el primer cuadro de la ciudad" />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                    <Label htmlFor="delivery-fee">Costo Envío</Label>
+                    <Input id="delivery-fee" type="number" value={selectedZone.delivery_fee ?? 0} onChange={e => setSelectedZone(p => p && {...p, delivery_fee: Number(e.target.value) })} />
+                    </div>
+                    <div className="space-y-2">
+                    <Label htmlFor="minimum-order">Pedido Mínimo</Label>
+                    <Input id="minimum-order" type="number" value={selectedZone.minimum_order ?? 0} onChange={e => setSelectedZone(p => p && {...p, minimum_order: Number(e.target.value) })} />
+                    </div>
+                </div>
+                <div className="space-y-2">
+                    <Label htmlFor="zone-color">Color</Label>
+                    <Input id="zone-color" type="color" value={selectedZone.color || "#FF0000"} onChange={e => setSelectedZone(p => p && {...p, color: e.target.value })} className="w-full h-10 p-1" />
+                </div>
+                <div className="flex items-center justify-between rounded-lg border p-3">
+                    <Label htmlFor="is_active" className="font-medium">¿Zona Activa?</Label>
+                    <Switch id="is_active" checked={selectedZone.is_active} onCheckedChange={c => setSelectedZone(p => p && {...p, is_active: c })} />
+                </div>
+                <div className="flex flex-col gap-2 pt-2">
+                    <Button onClick={handleSaveZone} disabled={submitting || !selectedZone.area} className="w-full">
+                    {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                    {selectedZone.id ? "Actualizar Zona" : "Guardar Nueva Zona"}
+                    </Button>
+                    <Button variant="outline" onClick={handleCancel} className="w-full">
+                    <X className="mr-2 h-4 w-4" />
+                    Cancelar
+                    </Button>
+                </div>
+            </div>
+          ) : isDrawing ? (
+            <div className="text-center py-10 text-muted-foreground">
+                <Loader2 className="mx-auto h-8 w-8 animate-spin mb-4"/>
+                <p>Dibuja una forma en el mapa para configurar los detalles de la nueva zona.</p>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center text-center py-10">
+              <MapPin className="h-12 w-12 text-muted-foreground" />
+              <p className="mt-4 text-muted-foreground">Selecciona una zona para editarla o crea una nueva.</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
 }

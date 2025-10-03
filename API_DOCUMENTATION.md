@@ -3,9 +3,9 @@
 API REST completa para gestionar la plataforma de delivery.
 
 ## Base URL
-\`\`\`
+```
 http://localhost:3000/api
-\`\`\`
+```
 
 ## Autenticación
 Actualmente la API no requiere autenticación. En producción se recomienda implementar JWT o API Keys.
@@ -22,31 +22,51 @@ Obtener todos los usuarios con filtros opcionales.
 - `status` (opcional): "activo" | "inactivo"
 
 **Ejemplo:**
-\`\`\`bash
+```bash
 curl http://localhost:3000/api/users?role=repartidor&status=activo
-\`\`\`
+```
 
 ### GET /api/users/[id]
 Obtener un usuario específico por ID.
+
+**Ejemplo:**
+```bash
+curl http://localhost:3000/api/users/123
+```
 
 ### POST /api/users
 Crear un nuevo usuario.
 
 **Body:**
-\`\`\`json
+```json
 {
   "name": "Juan Pérez",
   "email": "juan@example.com",
   "phone": "+34 600 123 456",
   "role": "cliente"
 }
-\`\`\`
+```
 
 ### PUT /api/users/[id]
 Actualizar un usuario existente.
 
+**Body:**
+```json
+{
+  "name": "Juan Carlos",
+  "email": "juancarlos@example.com",
+  "phone": "+34 600 987 654",
+  "role": "repartidor"
+}
+```
+
 ### DELETE /api/users/[id]
 Eliminar un usuario.
+
+**Ejemplo:**
+```bash
+curl -X DELETE http://localhost:3000/api/users/123
+```
 
 ---
 
@@ -66,14 +86,14 @@ Obtener un producto específico por ID.
 Crear un nuevo producto.
 
 **Body:**
-\`\`\`json
+```json
 {
   "name": "Pizza Margarita",
   "price": 12.99,
   "category": "comida",
   "description": "Pizza clásica con tomate y mozzarella"
 }
-\`\`\`
+```
 
 ### PUT /api/products/[id]
 Actualizar un producto existente.
@@ -99,7 +119,7 @@ Obtener un pedido específico por ID.
 Crear un nuevo pedido.
 
 **Body:**
-\`\`\`json
+```json
 {
   "customerId": "user-123",
   "customerName": "María García",
@@ -113,7 +133,7 @@ Crear un nuevo pedido.
   ],
   "address": "Calle Mayor 123, Madrid"
 }
-\`\`\`
+```
 
 ### PUT /api/orders/[id]
 Actualizar un pedido existente.
@@ -125,46 +145,56 @@ Eliminar un pedido.
 Asignar un repartidor a un pedido.
 
 **Body:**
-\`\`\`json
+```json
 {
   "deliveryPersonId": "user-456"
 }
-\`\`\`
+```
 
 ### PATCH /api/orders/[id]/status
 Actualizar el estado de un pedido.
 
 **Body:**
-\`\`\`json
+```json
 {
-  "status": "entregado"
+  "status": "entregado",
+  "notes": "El pedido fue entregado satisfactoriamente"
 }
-\`\`\`
+```
 
 ---
 
 ## Entregas
 
 ### GET /api/deliveries
-Obtener todas las entregas activas.
+Obtener todas las entregas activas o con filtros de estado.
 
 **Query Parameters:**
-- `status` (opcional): "pagado" | "en ruta" | "entregado"
+- `status` (opcional): "out_for_delivery" | "delivered"
+
+**Ejemplo:**
+```bash
+curl http://localhost:3000/api/deliveries?status=out_for_delivery
+```
 
 ### GET /api/deliveries/[orderId]
-Obtener el seguimiento de una entrega específica.
+Obtener el seguimiento de una entrega específica por ID de pedido.
+
+**Ejemplo:**
+```bash
+curl http://localhost:3000/api/deliveries/123
+```
 
 ### PATCH /api/deliveries/[orderId]
-Actualizar la ubicación y progreso de una entrega.
+Actualizar el estado de una entrega (usa el mismo endpoint que `PATCH /api/orders/[id]/status` pero se enfoca en el contexto de entrega).
 
 **Body:**
-\`\`\`json
+```json
 {
-  "currentLocation": "Calle Alcalá 50",
-  "progress": 75,
-  "estimatedTime": "5 min"
+  "status": "in_transit",
+  "notes": "Repartidor en camino con el pedido."
 }
-\`\`\`
+```
 
 ---
 
@@ -174,26 +204,25 @@ Actualizar la ubicación y progreso de una entrega.
 Obtener estadísticas generales del dashboard.
 
 **Respuesta:**
-\`\`\`json
+```json
 {
   "success": true,
   "data": {
-    "totalOrders": 150,
-    "activeDeliveries": 12,
+    "users": 45,
+    "customers": 37,
+    "drivers": 8,
+    "orders": 150,
+    "products": 28,
+    "stores": 3,
     "totalRevenue": 4567.89,
-    "activeUsers": 45,
-    "ordersByStatus": {
-      "pagado": 5,
-      "enRuta": 12,
-      "entregado": 133
-    },
-    "totalProducts": 28,
-    "availableProducts": 25,
-    "totalDeliveryPersons": 8,
-    "totalCustomers": 37
+    "ordersByStatus": [
+      { "status": "pending", "count": 5 },
+      { "status": "out_for_delivery", "count": 12 },
+      { "status": "delivered", "count": 133 }
+    ]
   }
 }
-\`\`\`
+```
 
 ---
 
@@ -202,21 +231,21 @@ Obtener estadísticas generales del dashboard.
 Todas las respuestas siguen este formato:
 
 **Éxito:**
-\`\`\`json
+```json
 {
   "success": true,
   "data": { ... },
   "message": "Operación exitosa"
 }
-\`\`\`
+```
 
 **Error:**
-\`\`\`json
+```json
 {
   "success": false,
   "error": "Descripción del error"
 }
-\`\`\`
+```
 
 ---
 
@@ -233,7 +262,7 @@ Todas las respuestas siguen este formato:
 ## Ejemplos de Uso
 
 ### Crear un pedido desde el ecommerce
-\`\`\`javascript
+```javascript
 const response = await fetch('http://localhost:3000/api/orders', {
   method: 'POST',
   headers: {
@@ -256,18 +285,43 @@ const response = await fetch('http://localhost:3000/api/orders', {
 
 const data = await response.json()
 console.log(data)
-\`\`\`
+```
 
 ### Obtener productos disponibles
-\`\`\`javascript
+```javascript
 const response = await fetch('http://localhost:3000/api/products?status=disponible')
 const data = await response.json()
 console.log(data.data) // Array de productos
-\`\`\`
+```
 
 ### Seguimiento de entrega en tiempo real
-\`\`\`javascript
+```javascript
 const orderId = 'order-123'
 const response = await fetch(`http://localhost:3000/api/deliveries/${orderId}`)
 const data = await response.json()
 console.log(data.data) // Información de seguimiento
+```
+
+### Actualizar el estado de un pedido
+```javascript
+const orderId = '123';
+const response = await fetch(`http://localhost:3000/api/orders/${orderId}/status`, {
+  method: 'PATCH',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    status: 'delivered',
+    notes: 'Pedido entregado al cliente'
+  })
+});
+const data = await response.json();
+console.log(data);
+```
+
+### Obtener estadísticas del dashboard
+```javascript
+const response = await fetch('http://localhost:3000/api/stats');
+const data = await response.json();
+console.log(data.data);
+```

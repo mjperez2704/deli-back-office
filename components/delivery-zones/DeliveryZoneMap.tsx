@@ -1,5 +1,5 @@
 /* eslint-disable no-undef */
-"use server"
+"use client"
 
 import {
   GoogleMap,
@@ -31,7 +31,7 @@ interface DeliveryZoneMapProps {
   isDrawing: boolean
 }
 
-export async function DeliveryZoneMap({
+export function DeliveryZoneMap({
   apiKey,
   zones = [],
   selectedZoneId,
@@ -67,10 +67,10 @@ export async function DeliveryZoneMap({
 
   useEffect(() => {
     if (mapRef.current && selectedZoneId) {
-      const zone: any = zones.find(z => z.id === selectedZoneId)
+      const zone = zones.find(z => z.id === selectedZoneId)
       if (zone?.area.type === "Polygon") {
         const bounds = new google.maps.LatLngBounds()
-        zone.area.coordinates[0].forEach((coord: { lat: number | google.maps.LatLng | google.maps.LatLngLiteral; lng: number | boolean | null | undefined }) => {
+        zone.area.coordinates[0].forEach(coord => {
           bounds.extend(new google.maps.LatLng(coord.lat, coord.lng))
         })
         mapRef.current.fitBounds(bounds)
