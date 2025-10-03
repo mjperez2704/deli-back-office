@@ -3,36 +3,36 @@ import {
   getAllDeliveryZones,
   createDeliveryZone,
 } from "@/lib/db/queries"
+import type { DeliveryZone } from "@/lib/types/database"
 
 // GET all delivery zones
 export async function GET() {
   try {
     const { data, error } = await getAllDeliveryZones()
     if (error) {
-      // Provide a more specific error if the table doesn't exist
       if (error.toLowerCase().includes("doesn't exist")) {
         return NextResponse.json({ success: false, error: "La tabla 'delivery_zones' no fue encontrada. Por favor, ejecuta las migraciones de la base de datos." }, { status: 500 });
       }
       throw new Error(error)
     }
 
-    const zones = data.map((zone: any) => {
+    const zones = (data as DeliveryZone[]).map((zone: DeliveryZone) => {
         try {
-          // If area is null/undefined in DB, area_geojson will be null. Skip it.
-          if (!zone.area_geojson) {
+          if (!zone.area) {
             console.warn(`La zona con ID ${zone.id} no tiene geometría y será omitida.`)
             return null
           }
           return {
             ...zone,
-            area: JSON.parse(zone.area_geojson),
+            // The area is already an object from the query alias, no need to parse
+            area: zone.area, 
           }
         } catch (parseError) {
           console.error(`Error al procesar la geometría para la zona ID ${zone.id}. Será omitida.`, parseError)
-          return null // Exclude corrupted zone from the result
+          return null 
         }
       })
-      .filter(Boolean) // Remove nulls from the array
+      .filter(Boolean) 
 
     return NextResponse.json({ success: true, data: zones })
   } catch (err) {
@@ -45,19 +45,29 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    if (!body.area) {
-        return NextResponse.json({ success: false, error: "El área de la zona es requerida." }, { status: 400 })
+    if (!body.area || (typeof body.area === 'string' && JSON.parse(body.area).length === 0)) {
+        return NextResponse.json({ success: false, error: "El área de la zona es requerida y no puede estar vacía." }, { status: 400 })
     }
-    const { data, error } = await createDeliveryZone(body)
+    
+    // The `createDeliveryZone` function expects the `area` to be an object that it will stringify.
+    // The frontend sends it as a string, so we ensure it's passed correctly.
+    const zoneData = {
+        ...body,
+        area: typeof body.area === 'string' ? JSON.parse(body.area) : body.area
+    };
+
+    const { data, error } = await createDeliveryZone(zoneData)
 
     if (error) {
       return NextResponse.json({ success: false, error }, { status: 400 })
     }
     
-    // The created data already has the area parsed correctly by the query
     return NextResponse.json({ success: true, data }, { status: 201 })
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err)
+    if (err instanceof SyntaxError) { // Catches JSON.parse errors
+      return NextResponse.json({ success: false, error: "El formato del área enviada es inválido." }, { status: 400 })
+    }
     return NextResponse.json({ success: false, error: errorMessage }, { status: 500 })
   }
 }

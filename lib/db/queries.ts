@@ -124,6 +124,7 @@ export async function createOrder(orderData: any) {
     const itemsValues = orderData.items.map((item: any) => [
       orderId,
       item.productId,
+      item.quantity,
       productPriceMap.get(item.productId),
       (parseFloat(productPriceMap.get(item.productId)) * item.quantity).toFixed(2),
     ])
@@ -492,7 +493,7 @@ export async function createDeliveryZone(zoneData: any) {
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `;
 
-  const { data: {insertId}, error }: any = await executeQuery<ResultSetHeader>(query, [
+  const { data, error }: any = await executeQuery<ResultSetHeader>(query, [
     name,
     description,
     delivery_fee,
@@ -503,8 +504,12 @@ export async function createDeliveryZone(zoneData: any) {
   ]);
 
   if (error) return { data: null, error };
+  if (!data || !data.insertId) {
+    return { data: null, error: "Failed to create delivery zone, no insertId returned." };
+  }
+  
   // After creation, we fetch the complete zone data to return to the client.
-  return getDeliveryZoneById(insertId);
+  return getDeliveryZoneById(data.insertId);
 }
 
 export async function updateDeliveryZone(id: number, zoneData: any) {
@@ -553,9 +558,11 @@ export async function createNotification(data: any) {
     data.type,
   ])
   if (error) return { data: null, error }
-
+  if (!result) {
+    return { data: null, error: "Failed to create notification." };
+  }
   const selectQuery = "SELECT * FROM notifications WHERE id = ?"
-  const { data: newData, error: newError } = await executeQuery<RowDataPacket[]>(selectQuery, [result?.insertId])
+  const { data: newData, error: newError } = await executeQuery<RowDataPacket[]>(selectQuery, [result.insertId])
   return { data: newData?.[0] || null, error: newError }
 }
 
@@ -619,6 +626,9 @@ export async function createProduct(productData: any) {
   ])
 
   if (error) return { data: null, error }
+  if (!result) {
+    return { data: null, error: "Failed to create product." };
+  }
   return getProductById(result.insertId)
 }
 
@@ -685,7 +695,7 @@ export async function getStats() {
         const [orders] = await connection.execute<RowDataPacket[]>("SELECT COUNT(*) as count FROM orders");
         const [products] = await connection.execute<RowDataPacket[]>("SELECT COUNT(*) as count FROM products");
         const [stores] = await connection.execute<RowDataPacket[]>("SELECT COUNT(*) as count FROM stores");
-        const [totalRevenueResult] = await connection.execute<RowDataPacket[]>("SELECT SUM(total_amount) as total FROM orders WHERE payment_status = 'paid'");
+        const [totalRevenueResult] = await connection.execute<RowDataPacket[]>("SELECT SUM(total) as total FROM orders WHERE payment_status = 'paid'");
         const [ordersByStatus] = await connection.execute<RowDataPacket[]>("SELECT status, COUNT(*) as count FROM orders GROUP BY status");
 
         const stats = {

@@ -8,8 +8,19 @@ import {
   Polygon,
   Circle,
 } from "@react-google-maps/api"
-import { useCallback, useState, useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef } from "react"
 import type { DeliveryZone } from "@/lib/types/database"
+
+interface ZoneShape {
+  type: "Polygon" | "Circle"
+  coordinates: any
+  radius?: number
+}
+
+// Update the DeliveryZone type to accept an array of shapes for its area
+type MappedDeliveryZone = Omit<DeliveryZone, 'area'> & {
+  area: ZoneShape[]
+}
 
 const containerStyle = {
   width: "100%",
@@ -23,7 +34,7 @@ const defaultCenter = {
 
 interface DeliveryZoneMapProps {
   apiKey: string
-  zones: DeliveryZone[]
+  zones: MappedDeliveryZone[]
   selectedZoneId?: number | null
   onZoneClick: (zoneId: number) => void
   onPolygonComplete: (polygon: google.maps.Polygon) => void
@@ -49,7 +60,7 @@ export function DeliveryZoneMap({
 
   const onLoad = useCallback(function callback(mapInstance: google.maps.Map) {
     mapRef.current = mapInstance
-    // Optional: Auto-center map based on user's location
+    // Center map on user's location if available
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(position => {
         mapInstance.setCenter({
@@ -65,24 +76,33 @@ export function DeliveryZoneMap({
     mapRef.current = null
   }, [])
 
+  // Auto-zoom to fit the selected zone's shapes
   useEffect(() => {
     if (mapRef.current && selectedZoneId) {
       const zone = zones.find(z => z.id === selectedZoneId)
-      if (zone?.area.type === "Polygon") {
+      if (zone && zone.area.length > 0) {
         const bounds = new google.maps.LatLngBounds()
-        zone.area.coordinates[0].forEach(coord => {
-          bounds.extend(new google.maps.LatLng(coord.lat, coord.lng))
+        zone.area.forEach(shape => {
+          if (shape.type === "Polygon") {
+            shape.coordinates[0].forEach((coord: { lat: number; lng: number }) => {
+              bounds.extend(new google.maps.LatLng(coord.lat, coord.lng))
+            })
+          } else if (shape.type === "Circle") {
+            // For circles, we can extend bounds by calculating the rough corners of a bounding box
+            const center = new google.maps.LatLng(shape.coordinates.lat, shape.coordinates.lng)
+            const circle = new google.maps.Circle({ center, radius: shape.radius })
+            bounds.union(circle.getBounds()!)
+          }
         })
-        mapRef.current.fitBounds(bounds)
-      } else if (zone?.area.type === "Circle") {
-        mapRef.current.setCenter(zone.area.coordinates)
-        mapRef.current.setZoom(14) // Zoom level might need adjustment based on radius
+        if (!bounds.isEmpty()) {
+          mapRef.current.fitBounds(bounds)
+        }
       }
     }
   }, [selectedZoneId, zones])
 
   if (loadError) {
-    return <div>Error al cargar el mapa. Verifica tu conexión y la clave de API.</div>
+    return <div>Error al cargar el mapa.</div>
   }
 
   return isLoaded ? (
@@ -101,25 +121,10 @@ export function DeliveryZoneMap({
             drawingControl: true,
             drawingControlOptions: {
               position: google.maps.ControlPosition.TOP_CENTER,
-              drawingModes: [
-                google.maps.drawing.OverlayType.POLYGON,
-                google.maps.drawing.OverlayType.CIRCLE,
-              ],
+              drawingModes: [google.maps.drawing.OverlayType.POLYGON, google.maps.drawing.OverlayType.CIRCLE],
             },
-            polygonOptions: {
-              fillOpacity: 0.3,
-              strokeWeight: 2,
-              clickable: false,
-              editable: true,
-              zIndex: 1,
-            },
-            circleOptions: {
-              fillOpacity: 0.3,
-              strokeWeight: 2,
-              clickable: false,
-              editable: true,
-              zIndex: 1,
-            },
+            polygonOptions: { fillOpacity: 0.3, strokeWeight: 2, clickable: false, editable: true, zIndex: 1 },
+            circleOptions: { fillOpacity: 0.3, strokeWeight: 2, clickable: false, editable: true, zIndex: 1 },
           }}
         />
       )}
@@ -135,28 +140,32 @@ export function DeliveryZoneMap({
           clickable: true,
           zIndex: isSelected ? 2 : 1,
         }
-
-        if (zone.area.type === "Polygon") {
-          return (
-            <Polygon
-              key={zone.id}
-              paths={zone.area.coordinates[0]}
-              options={options}
-              onClick={() => onZoneClick(zone.id)}
-            />
-          )
-        } else if (zone.area.type === "Circle") {
-          return (
-            <Circle
-              key={zone.id}
-              center={zone.area.coordinates}
-              radius={zone.area.radius}
-              options={options}
-              onClick={() => onZoneClick(zone.id)}
-            />
-          )
-        }
-        return null
+        
+        // A zone can now have multiple shapes, so we iterate through them
+        return zone.area.map((shape, index) => {
+          const key = `${zone.id}-${index}`
+          if (shape.type === "Polygon") {
+            return (
+              <Polygon
+                key={key}
+                paths={shape.coordinates[0]}
+                options={options}
+                onClick={() => onZoneClick(zone.id)}
+              />
+            )
+          } else if (shape.type === "Circle" && shape.radius) {
+            return (
+              <Circle
+                key={key}
+                center={shape.coordinates}
+                radius={shape.radius}
+                options={options}
+                onClick={() => onZoneClick(zone.id)}
+              />
+            )
+          }
+          return null
+        })
       })}
     </GoogleMap>
   ) : (
