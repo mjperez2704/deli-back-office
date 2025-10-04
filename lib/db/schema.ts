@@ -16,7 +16,7 @@ import {
 
 export const users = mysqlTable('users', {
     id: bigint('id', { mode: 'number' }).autoincrement().primaryKey(),
-    name: varchar('name', { length: 255 }).notNull(),
+    full_name: varchar('name', { length: 255 }).notNull(),
     email: varchar('email', { length: 255 }).notNull().unique(),
     phone: varchar('phone', { length: 20 }),
     passwordHash: varchar('password_hash', { length: 255 }),

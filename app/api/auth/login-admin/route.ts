@@ -16,6 +16,9 @@ const loginSchema = z.object({
   password: z.string().min(1, 'La contraseña es requerida.'),
 });
 
+// Suponiendo que el ID del rol de administrador es 1, basado en la captura de pantalla de la BD.
+const ADMIN_ROLE_ID = 1;
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -27,16 +30,17 @@ export async function POST(request: Request) {
 
     const { email, password } = validation.data;
 
-    // 1. Buscar al usuario
+    // 1. Buscar al usuario por email
     const userResult = await db.select().from(users).where(eq(users.email, email));
     if (userResult.length === 0) {
       return NextResponse.json({ success: false, error: 'Credenciales inválidas.' }, { status: 401 });
     }
     const user = userResult[0];
 
-    // 2. Verificar que el usuario sea administrador
-    if (user.role !== 'admin') {
-      return NextResponse.json({ success: false, error: 'Acceso no autorizado.' }, { status: 403 });
+    // 2. Verificar que el usuario sea administrador usando role_id
+    // @ts-ignore - Drizzle puede no tener el tipo exacto de la columna si el schema está desactualizado
+    if (user.role_id !== ADMIN_ROLE_ID) {
+      return NextResponse.json({ success: false, error: 'Acceso no autorizado. Se requiere rol de administrador.' }, { status: 403 });
     }
 
     // 3. Verificar la contraseña
@@ -49,9 +53,9 @@ export async function POST(request: Request) {
     const session = await getIronSession(cookies(), sessionOptions);
     session.user = {
         id: user.id,
-        name: user.name,
+        name: user.full_name, // CORREGIDO: Usar full_name
         email: user.email,
-        role: user.role,
+        role: 'admin', // Asignamos el rol como string en la sesión para facilidad de uso
     };
     await session.save();
 

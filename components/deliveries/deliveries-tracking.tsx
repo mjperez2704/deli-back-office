@@ -5,26 +5,18 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Package, CheckCircle, Clock, MapPin, Truck, Timer, AlertCircle } from "lucide-react"
 import { Progress } from "@/components/ui/progress"
-import type { Order } from "@/lib/types/database" // Import a suitable type for Order
+import type { Order } from "@/lib/types/database" // Import the full Order type
 
-// Define a more specific type for deliveries based on the Order type
-type Delivery = Pick<
-  Order,
-  'id' | 'order_number' | 'status' | 'distance_km' | 'estimated_delivery_time'
-> & {
-  customer: { name: string; address: string };
-  driver: { name: string };
-  progress: number;
-};
-
+// We will use the Order type directly as it comes from the API
+// No need for a separate 'Delivery' type if the API returns full order objects
 
 export function DeliveriesTracking() {
   const [stats, setStats] = useState({
     active: 0,
     completedToday: 0,
-    avgTime: 0,
+    avgTime: 0, // Placeholder for now
   })
-  const [deliveries, setDeliveries] = useState<Delivery[]>([])
+  const [deliveries, setDeliveries] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -32,33 +24,23 @@ export function DeliveriesTracking() {
     try {
       setError(null)
       const response = await fetch("/api/deliveries")
+      if (!response.ok) {
+        throw new Error(`API responded with status ${response.status}`)
+      }
       const data = await response.json()
 
       if (data.success) {
         const fetchedDeliveries: Order[] = data.data || []
         
-        // Process data for display
-        const transformedDeliveries = fetchedDeliveries.map(d => ({
-          id: d.id,
-          order_number: d.order_number,
-          customer: {
-            name: d.customer_user?.full_name || "N/A",
-            address: d.delivery_address?.address_line1 || "Dirección no disponible",
-          },
-          driver: { name: d.driver?.user.full_name || "No asignado" },
-          status: d.status,
-          distance_km: d.distance_km,
-          estimated_delivery_time: d.estimated_delivery_time,
-          // Calculate progress (this is a placeholder logic)
-          progress: d.status === 'delivered' ? 100 : Math.floor(Math.random() * 50) + 25,
-        }));
-
-        setDeliveries(transformedDeliveries as Delivery[]);
+        setDeliveries(fetchedDeliveries);
         
-        // Update stats
+        // Update stats based on real data
         const active = fetchedDeliveries.filter(d => d.status === 'out_for_delivery').length
-        const completedToday = fetchedDeliveries.filter(d => d.status === 'delivered' && new Date(d.actual_delivery_time!).toDateString() === new Date().toDateString()).length
-        setStats(prev => ({ ...prev, active, completedToday }))
+        const completedToday = fetchedDeliveries.filter(
+            d => d.status === 'delivered' && d.actual_delivery_time && new Date(d.actual_delivery_time).toDateString() === new Date().toDateString()
+        ).length
+        
+        setStats({ active, completedToday, avgTime: 28 }) // avgTime is still a placeholder
 
       } else {
         throw new Error(data.error || "Failed to fetch deliveries.")
@@ -76,23 +58,28 @@ export function DeliveriesTracking() {
     const interval = setInterval(fetchDeliveries, 30000) // Auto-refresh every 30 seconds
     return () => clearInterval(interval)
   }, [])
+  
+  // Calculate progress based on status (example logic)
+  const getProgress = (status: Order['status']) => {
+    const statusProgress: Record<string, number> = {
+        'pending': 10,
+        'confirmed': 25,
+        'preparing': 50,
+        'out_for_delivery': 75,
+        'delivered': 100,
+        'cancelled': 0,
+    };
+    return statusProgress[status] || 0;
+  };
+
 
   return (
     <div className="space-y-6">
       {/* Stats Cards */}
       <div className="grid gap-6 md:grid-cols-3">
-        {/* Active Deliveries Card */}
-        <Card className="border-border bg-card">
-          <CardContent className="p-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Entregas Activas</p><p className="text-4xl font-bold text-foreground">{stats.active}</p></div><div className="rounded-lg bg-orange-500/10 p-3"><Package className="h-6 w-6 text-orange-500" /></div></div></CardContent>
-        </Card>
-        {/* Completed Today Card */}
-        <Card className="border-border bg-card">
-          <CardContent className="p-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Completadas Hoy</p><p className="text-4xl font-bold text-foreground">{stats.completedToday}</p></div><div className="rounded-lg bg-green-500/10 p-3"><CheckCircle className="h-6 w-6 text-green-500" /></div></div></CardContent>
-        </Card>
-        {/* Average Time Card */}
-        <Card className="border-border bg-card">
-          <CardContent className="p-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Tiempo Promedio</p><p className="text-4xl font-bold text-foreground">{stats.avgTime} min</p></div><div className="rounded-lg bg-cyan-500/10 p-3"><Clock className="h-6 w-6 text-cyan-500" /></div></div></CardContent>
-        </Card>
+        <Card className="border-border bg-card"><CardContent className="p-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Entregas Activas</p><p className="text-4xl font-bold text-foreground">{stats.active}</p></div><div className="rounded-lg bg-orange-500/10 p-3"><Package className="h-6 w-6 text-orange-500" /></div></div></CardContent></Card>
+        <Card className="border-border bg-card"><CardContent className="p-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Completadas Hoy</p><p className="text-4xl font-bold text-foreground">{stats.completedToday}</p></div><div className="rounded-lg bg-green-500/10 p-3"><CheckCircle className="h-6 w-6 text-green-500" /></div></div></CardContent></Card>
+        <Card className="border-border bg-card"><CardContent className="p-6"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Tiempo Promedio</p><p className="text-4xl font-bold text-foreground">{stats.avgTime} min</p></div><div className="rounded-lg bg-cyan-500/10 p-3"><Clock className="h-6 w-6 text-cyan-500" /></div></div></CardContent></Card>
       </div>
 
       {/* Active Deliveries */}
@@ -112,17 +99,25 @@ export function DeliveriesTracking() {
                 <CardContent className="p-6">
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
-                      <h3 className="text-lg font-bold text-foreground">Pedido {delivery.order_number}</h3>
+                      <h3 className="text-lg font-bold text-foreground">Pedido #{delivery.order_number}</h3>
                       <Badge variant="outline" className="border-orange-500 text-orange-500">{delivery.status}</Badge>
                     </div>
-                    <p className="text-sm text-muted-foreground">{delivery.customer.name}</p>
-                    <div className="flex items-center gap-2 text-sm"><Truck className="h-4 w-4 text-muted-foreground" /><span className="text-foreground">{delivery.driver.name}</span></div>
-                    <div className="flex items-start gap-2 text-sm"><MapPin className="mt-0.5 h-4 w-4 text-muted-foreground" /><span className="text-foreground">{delivery.customer.address}</span></div>
-                    <div className="flex items-center gap-2 text-sm"><Package className="h-4 w-4 text-muted-foreground" /><span className="text-foreground">A {delivery.distance_km} km del destino</span></div>
-                    <div className="flex items-center gap-2 text-sm"><Timer className="h-4 w-4 text-muted-foreground" /><span className="text-green-500">Llegada estimada: {delivery.estimated_delivery_time}</span></div>
+                    <p className="text-sm text-muted-foreground">{delivery.customer_id || 'Cliente no disponible'}</p>
+                    <div className="flex items-center gap-2 text-sm"><Truck className="h-4 w-4 text-muted-foreground" /><span className="text-foreground">{delivery.driver?.user.full_name || 'No asignado'}</span></div>
+                    <div className="flex items-start gap-2 text-sm"><MapPin className="mt-0.5 h-4 w-4 text-muted-foreground" /><span className="text-foreground">{delivery.delivery_address_id?.toString() || "Sin direccion de entrega" }</span></div>
+                    <div className="flex items-center gap-2 text-sm"><Package className="h-4 w-4 text-muted-foreground" /><span className="text-foreground">A {delivery.distance_km || 'N/A'} km del destino</span></div>
+                    <div className="flex items-center gap-2 text-sm">
+                        <Timer className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-green-500">
+                            Llegada estimada: {delivery.estimated_delivery_time ? new Date(delivery.estimated_delivery_time).toLocaleTimeString() : 'N/A'}
+                        </span>
+                    </div>
                     <div className="space-y-2">
-                      <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">Progreso</span><span className="font-medium text-foreground">{delivery.progress}%</span></div>
-                      <Progress value={delivery.progress} className="h-2" />
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-muted-foreground">Progreso</span>
+                        <span className="font-medium text-foreground">{getProgress(delivery.status)}%</span>
+                      </div>
+                      <Progress value={getProgress(delivery.status)} className="h-2" />
                     </div>
                   </div>
                 </CardContent>

@@ -1,25 +1,29 @@
 // lib/session.ts
-import type { IronSessionOptions } from 'iron-session';
-import type { User } from '@/lib/types/database'; // Suponiendo que tienes un tipo User
+import type { SessionOptions } from 'iron-session'; // CORRECCIÓN: El nombre correcto es SessionOptions
 
-// Asegúrate de tener una variable de entorno para el secreto de la sesión
-if (!process.env.SESSION_SECRET) {
-  throw new Error('SESSION_SECRET is not set in environment variables. Please add it to your .env.local file. It must be a private string of at least 32 characters.');
+// Definimos exactamente qué guardaremos en la sesión.
+export interface SessionData {
+  user?: {
+    id: number;
+    name: string;
+    email: string;
+    role: 'admin';
+  };
 }
 
-export const sessionOptions: IronSessionOptions = {
+if (!process.env.SESSION_SECRET) {
+  throw new Error('SESSION_SECRET is not set in environment variables. It must be a private string of at least 32 characters.');
+}
+
+export const sessionOptions: SessionOptions = { // CORRECCIÓN: Usar el tipo correcto aquí
   password: process.env.SESSION_SECRET,
-  cookieName: 'delibackoffice-session', // Nombre único para la cookie
+  cookieName: 'delibackoffice-session',
   cookieOptions: {
-    secure: process.env.NODE_ENV === 'production', // Solo HTTPS en producción
-    httpOnly: true, // La cookie no es accesible desde JavaScript en el cliente
-    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
   },
 };
 
-// Extiende los tipos de IronSession para incluir la propiedad `user` que almacenaremos.
+// Esto extiende los tipos de IronSession para que TypeScript entienda session.user
 declare module 'iron-session' {
-  interface IronSessionData {
-    user?: User;
-  }
+  interface IronSessionData extends SessionData {}
 }
